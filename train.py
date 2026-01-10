@@ -3,6 +3,8 @@ from bg_change import make
 import numpy as np
 import cv2
 
+from utils.save_video import VideoRecorder
+
 # Create environment WITH rendering enabled
 env = make(
     domain_name='cheetah',
