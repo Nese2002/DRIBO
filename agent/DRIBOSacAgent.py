@@ -4,9 +4,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as td
 
-from RSSM import RSSMEncoder
-from SAC import Actor, Critic
-import DRIBO
+from .RSSM import RSSMEncoder
+from .SAC import Actor, Critic
+from .DRIBO import DRIBO
 
 def soft_update_params(net, target_net, tau):
     for param, target_param in zip(net.parameters(), target_net.parameters()):
@@ -43,34 +43,34 @@ class DRIBOSacAgent(object):
         actions_shape,
         #general
         device,
-        hidden_dim=256,
+        hidden_dim=1024,
         #critic
         discount=0.99,
-        init_temperature=0.01,
-        critic_lr=1e-3,
-        critic_tau=0.005,
+        init_temperature=0.1,
+        critic_lr=1e-5,
+        critic_tau=0.01,
         critic_target_update_freq=2,
-        alpha_lr=1e-3,
-        alpha_beta=0.9,
+        alpha_lr=1e-4,
+        alpha_beta=0.5,
         #actor
-        actor_lr=1e-3,
+        actor_lr=1e-5,
         actor_log_std_min=-10,
         actor_log_std_max=2,
         actor_update_freq=2,
         #rssm
-        obs_encoder_feature_dim=50,
+        obs_encoder_feature_dim=1024,
         stochastic_size=30,
         deterministic_size=200,
-        encoder_lr=1e-3,
-        encoder_tau=0.005,
+        encoder_lr=1e-5,
+        encoder_tau=0.05,
         num_layers=4,
         num_filters=32,
         #DRIBO
         mib_update_freq=1,
-        mib_batch_size=10,
-        mib_seq_len=50,
-        beta_start_value=1e-3,
-        beta_end_value=1,
+        mib_batch_size=8,
+        mib_seq_len=32,
+        beta_start_value=1e-4,
+        beta_end_value=1e-3,
         grad_clip=500,#
         kl_balancing=True
     ):
@@ -122,7 +122,7 @@ class DRIBOSacAgent(object):
 
         self.critic_optimizer = torch.optim.Adam([{'params': self.critic.parameters()},{'params': self.encoder.parameters()}],lr=critic_lr)
 
-        self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_lr)
+        self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_lr, betas=(alpha_beta, 0.999))
 
         self.DRIBO_optimizer = torch.optim.Adam(self.DRIBO.encoder.parameters(), lr=encoder_lr)
 
@@ -142,8 +142,29 @@ class DRIBOSacAgent(object):
     def alpha(self):
         return self.log_alpha.exp()
     
+    #action selection
+    def select_action(self, obs, prev_action, prev_state):
+        with torch.no_grad():
+            obs = torch.FloatTensor(obs).to(self.device)
+            obs = obs.unsqueeze(0)
+            prev_state = self.encoder(obs, prev_action, prev_state)
+            latent_state = torch.cat([prev_state.stoch, prev_state.det], dim=-1)
+            mu, _, _, _ = self.actor(latent_state, compute_pi=False, compute_log_pi=False)
+            return mu.cpu().data.numpy().flatten(), mu, prev_state
+    
+    def sample_action(self, obs, prev_action, prev_state):
+        with torch.no_grad():
+            obs = torch.FloatTensor(obs).to(self.device)
+            obs = obs.unsqueeze(0)
+            prev_state = self.encoder(obs, prev_action, prev_state)
+            latent_state = torch.cat([prev_state.stoch, prev_state.det], dim=-1)
+            mu, pi, _, _ = self.actor(latent_state, compute_log_pi=False)
+            return pi.cpu().data.numpy().flatten(), pi, prev_state
+
+
+    #update
     def update(self, replay_buffer, t):
-        obses, actions, rewards, not_done = replay_buffer.sample_multi_view(self.batch_size, self.seq_len)
+        obses, positives, actions, rewards, not_done = replay_buffer.sample_multi_view(self.batch_size, self.seq_len)
 
         flat_actions = actions[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
         rewards = rewards[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
@@ -180,7 +201,7 @@ class DRIBOSacAgent(object):
             )
 
         if t % self.mib_update_freq == 0:
-            self.update_mib(obs1, obs2, action, mib_kwargs, L, step)
+            self.update_mib(obses, positives, actions, t)
 
 
     def update_critic(self, q_latent_states, flat_actions, rewards, next_latent_states, target_next_latent_states, not_done, t):
@@ -196,4 +217,48 @@ class DRIBOSacAgent(object):
             critic_loss.backward()
             self.critic_optimizer.step()
 
-            
+    def update_actor_and_alpha(self, latent_states, L, t):
+        _, pi, log_pi, log_std = self.actor(latent_states)
+        actor_Q1, actor_Q2 = self.critic(latent_states, pi)
+
+        actor_Q = torch.min(actor_Q1, actor_Q2)
+        actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
+
+        # optimize the actor
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        self.actor_optimizer.step()
+
+        self.log_alpha_optimizer.zero_grad()
+        alpha_loss = (self.alpha * (-log_pi - self.target_entropy).detach()).mean()
+
+        alpha_loss.backward()
+        self.log_alpha_optimizer.step()
+
+    def update_mib(self, obses1, obses2, actions, t):
+        seq_len, batch_size, ch, h, w  = obses1.size()
+        s1_prior, s1 = self.DRIBO.encode(obses1, actions)
+        s2_prior, s2 = self.DRIBO.encode(obses2, actions, ema=True)
+
+        # Maximize mutual information of task-relevant features
+        latent_states1 =torch.cat([s1.stoch, s1.det], dim=-1).reshape(seq_len * batch_size, -1)
+        latent_states2 = torch.cat([s2.stoch, s2.det], dim=-1).reshape(seq_len * batch_size, -1)
+
+        logits = self.DRIBO.compute_logits(latent_states1, latent_states2)
+        labels = torch.arange(logits.shape[0]).long().to(self.device)
+        loss = self.cross_entropy_loss(logits, labels)
+
+        # Minimize the task-irrelevant information
+        s1_dist = td.independent.Independent(td.Normal(s1.mean, s1.std), 1)
+        s2_dist = td.independent.Independent(td.Normal(s2.mean, s2.std), 1)
+        skl = self.DRIBO.compute_skl(s1_dist, s2_dist)
+        kl_balancing = self.DRIBO.compute_kl_balancing(s1_prior, s1)
+        beta = self.beta_scheduler(t)
+        loss += beta * kl_balancing
+        loss += beta * skl
+
+        self.encoder_optimizer.zero_grad()
+        self.DRIBO_optimizer.zero_grad()
+        loss.backward()
+        self.encoder_optimizer.step()
+        self.DRIBO_optimizer.step()

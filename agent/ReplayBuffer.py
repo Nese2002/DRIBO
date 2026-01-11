@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-import gym
+
 import os
 import sys
 from collections import deque, namedtuple
@@ -92,7 +92,7 @@ class ReplayBuffer(Dataset):
         rewards = torch.as_tensor(self.rewards[idxs], device=self.device).reshape(seq_len, batch_size)
         not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device).reshape(seq_len, batch_size)
 
-        return obses, actions, rewards, not_dones, positives
+        return obses, positives, actions, rewards, not_dones
     
     
     def save(self, save_dir):

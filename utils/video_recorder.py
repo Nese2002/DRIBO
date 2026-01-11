@@ -17,21 +17,10 @@ class VideoRecorder(object):
 
     def record(self, env):
         if self.enabled:
-            try:
-                frame = env.render(
-                    mode='rgb_array',
-                    height=self.height,
-                    width=self.width,
-                    camera_id=self.camera_id
-                )
-            except:
-                frame = env.render(
-                    mode='rgb_array',
-                )
-
+            frame = env.render()
             self.frames.append(frame)
 
     def save(self, file_name):
         if self.enabled:
             path = os.path.join(self.dir_name, file_name)
-            imageio.mimsave(path, self.frames, fps=self.fps)
+            imageio.mimsave(path, self.frames, fps=self.fps, codec='libx264')

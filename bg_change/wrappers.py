@@ -48,11 +48,8 @@ class DMCWrapper(gym.Env):
         domain_name,
         task_name,
         resource_files,
-        img_source,
         total_frames,
         task_kwargs=None,
-        visualize_reward={},
-        from_pixels=False,
         height=84,
         width=84,
         camera_id=0,
@@ -63,12 +60,10 @@ class DMCWrapper(gym.Env):
     ):
         assert 'random' in task_kwargs, \
             'please specify a seed, for deterministic behaviour'
-        self._from_pixels = from_pixels
         self._height = height
         self._width = width
         self._camera_id = camera_id
         self._frame_skip = frame_skip
-        self._img_source = img_source
         self.render_mode = render_mode
 
         self._frame_stack = frame_stack
@@ -79,7 +74,6 @@ class DMCWrapper(gym.Env):
             domain_name=domain_name,
             task_name=task_name,
             task_kwargs=task_kwargs,
-            visualize_reward=visualize_reward,
             environment_kwargs=environment_kwargs
         )
 
@@ -93,15 +87,12 @@ class DMCWrapper(gym.Env):
         )
 
         # create observation space
-        if from_pixels:
-            self._observation_space = spaces.Box(
-                low=0, high=255,
-                shape=[3*frame_stack, height, width], dtype=np.uint8
-            )
-        else:
-            self._observation_space = _spec_to_box(
-                self._env.observation_spec().values()
-            )
+
+        self._observation_space = spaces.Box(
+            low=0, high=255,
+            shape=[3*frame_stack, height, width], dtype=np.uint8
+        )
+
 
         self._internal_state_space = spaces.Box(
             low=-np.inf,
@@ -111,21 +102,21 @@ class DMCWrapper(gym.Env):
         )
 
         # background
-        if img_source is not None:
-            shape2d = (height, width)
-            
-            files = glob.glob(os.path.expanduser(resource_files))
-            assert len(
-                files
-            ), "Pattern {} does not match any files".format(
-                resource_files
-            )
-            print(len(files))
-    
-            self._bg_source = bg_change.RandomVideoSource(
-                shape2d, files,
-                total_frames=total_frames
-            )
+
+        shape2d = (height, width)
+        
+        files = glob.glob(os.path.expanduser(resource_files))
+        assert len(
+            files
+        ), "Pattern {} does not match any files".format(
+            resource_files
+        )
+        print(len(files))
+
+        self._bg_source = bg_change.RandomVideoSource(
+            shape2d, files,
+            total_frames=total_frames
+        )
            
         # set seed
         self._seed = task_kwargs.get('random', 1)
@@ -135,22 +126,19 @@ class DMCWrapper(gym.Env):
         return getattr(self._env, name)
 
     def _get_noisy_obs(self, time_step):
-        if self._from_pixels:
-            obs = self._render_frame(
-                height=self._height,
-                width=self._width,
-                camera_id=self._camera_id
-            )
-            if self._img_source is not None:
-                mask = np.logical_and(
-                    (obs[:, :, 2] > obs[:, :, 1]),
-                    (obs[:, :, 2] > obs[:, :, 0])
-                )  # hardcoded for dmc
-                bg = self._bg_source.get_image()
-                obs[mask] = bg[mask]
-            obs = obs.transpose(2, 0, 1).copy()
-        else:
-            obs = _flatten_obs(time_step.observation)
+        obs = self._render_frame(
+            height=self._height,
+            width=self._width,
+            camera_id=self._camera_id
+        )
+        mask = np.logical_and(
+            (obs[:, :, 2] > obs[:, :, 1]),
+            (obs[:, :, 2] > obs[:, :, 0])
+        )  # hardcoded for dmc
+        bg = self._bg_source.get_image()
+        obs[mask] = bg[mask]
+        obs = obs.transpose(2, 0, 1).copy()
+
         return obs
 
     def _get_obs(self):
@@ -179,9 +167,7 @@ class DMCWrapper(gym.Env):
         return self._norm_action_space
 
     def seed(self, seed=None):
-        """
-        Gymnasium seed() returns a tuple of seeds.
-        """
+
         if seed is not None:
             self._seed = seed
         self._true_action_space.seed(self._seed)
@@ -190,11 +176,7 @@ class DMCWrapper(gym.Env):
         return (self._seed,)
 
     def step(self, action):
-        """
-        Gymnasium step() returns 5 values: obs, reward, terminated, truncated, info
-        - terminated: episode ended due to task completion/failure
-        - truncated: episode ended due to time limit
-        """
+
         assert self._norm_action_space.contains(action)
         action = self._convert_action(action)
         assert self._true_action_space.contains(action)
@@ -211,19 +193,14 @@ class DMCWrapper(gym.Env):
         obs = self._get_noisy_obs(time_step)
         self._frames.append(obs)
         info['discount'] = time_step.discount
-        
-        # In DMC, episodes end naturally (terminated=True, truncated=False)
-        # If you want to handle time limits separately, you'd need to track steps
+       
         terminated = done
         truncated = False
         
         return self._get_obs(), reward, terminated, truncated, info
 
     def reset(self, seed=None, options=None):
-        """
-        Gymnasium reset() returns (obs, info) tuple.
-        seed parameter allows resetting with a new seed.
-        """
+        
         if seed is not None:
             self.seed(seed)
             
@@ -236,7 +213,7 @@ class DMCWrapper(gym.Env):
         return self._get_obs(), info
 
     def _render_frame(self, height=None, width=None, camera_id=0):
-        """Internal rendering method."""
+
         height = height or self._height
         width = width or self._width
         camera_id = camera_id or self._camera_id
@@ -245,12 +222,7 @@ class DMCWrapper(gym.Env):
         )
 
     def render(self):
-        """
-        Gymnasium render() API:
-        - No mode parameter (set via render_mode in __init__)
-        - Returns the rendered frame for rgb_array mode
-        - Returns None for human mode (displays directly)
-        """
+
         if self.render_mode == "rgb_array":
             obs = self._render_frame(
                 height=self._height,
@@ -259,13 +231,12 @@ class DMCWrapper(gym.Env):
             )
             
             # Apply background substitution if enabled
-            if self._from_pixels and self._img_source is not None:
-                mask = np.logical_and(
-                    (obs[:, :, 2] > obs[:, :, 1]),
-                    (obs[:, :, 2] > obs[:, :, 0])
-                )
-                bg = self._bg_source.get_image()
-                obs[mask] = bg[mask]
+            mask = np.logical_and(
+                (obs[:, :, 2] > obs[:, :, 1]),
+                (obs[:, :, 2] > obs[:, :, 0])
+            )
+            bg = self._bg_source.get_current_image()
+            obs[mask] = bg[mask]
             
             return obs
         return None

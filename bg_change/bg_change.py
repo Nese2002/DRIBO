@@ -76,3 +76,6 @@ class RandomVideoSource(ImageSource):
         self._loc += 1
         return img
 
+    def get_current_image(self):
+        """Get current frame WITHOUT advancing the index"""
+        return self.arr[self._loc % self.total_frames]
