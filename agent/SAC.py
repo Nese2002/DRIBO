@@ -39,7 +39,7 @@ def squash(mu, pi, log_pi): #Applies the tanh squashing function to bound action
 
 class Actor(nn.Module):
     def __init__(
-        self, action_shape, hidden_dim, obs_encoder_feature_dim,
+        self, action_shape, hidden_dim, feature_dim,
         log_std_min, log_std_max
     ):
         super().__init__()
@@ -48,7 +48,7 @@ class Actor(nn.Module):
         self.log_std_max = log_std_max
 
         self.fc = nn.Sequential(
-            nn.Linear(obs_encoder_feature_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(feature_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, 2 * action_shape[0])
         )
@@ -83,11 +83,11 @@ class Actor(nn.Module):
         return mu, pi, log_pi, log_std
     
 class QFunction(nn.Module):
-    def __init__(self, obs_encoder_feature_dim, action_dim, hidden_dim):
+    def __init__(self, feature_dim, action_dim, hidden_dim):
         super().__init__()
 
         self.fc = nn.Sequential(
-            nn.Linear(obs_encoder_feature_dim + action_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(feature_dim + action_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, 1)
         )
@@ -99,15 +99,15 @@ class QFunction(nn.Module):
     
 class Critic(nn.Module):
     def __init__(
-        self, action_shape, hidden_dim, obs_encoder_feature_dim,
+        self, action_shape, hidden_dim, feature_dim,
     ):
         super().__init__()
     
         self.Q1 = QFunction(
-            obs_encoder_feature_dim, action_shape[0], hidden_dim
+            feature_dim, action_shape[0], hidden_dim
         )
         self.Q2 = QFunction(
-            obs_encoder_feature_dim, action_shape[0], hidden_dim
+            feature_dim, action_shape[0], hidden_dim
         )
 
         self.apply(weight_init)

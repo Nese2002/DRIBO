@@ -60,20 +60,20 @@ class ReplayBuffer(Dataset):
         self.full = self.full or self.idx == 0
 
     
-    def _sample_sequential_idx(self, n, L):
+    def _sample_sequential_idx(self, batch_size, seq_len):
         idx = np.random.randint(
-            0, self.capacity - L if self.full else self.idx - L, size=n
+            0, self.capacity - seq_len if self.full else self.idx - seq_len, size=batch_size
         )
         pos_in_path = idx - idx // self._path_len * self._path_len
-        idx[pos_in_path > self._path_len - L] = idx[pos_in_path > self._path_len - L] // self._path_len * self._path_len + L
-        idxs = np.zeros((n, L), dtype=np.int)
-        for i in range(n):
-            idxs[i] = np.arange(idx[i], idx[i] + L)
+        idx[pos_in_path > self._path_len - seq_len] = idx[pos_in_path > self._path_len - seq_len] // self._path_len * self._path_len + seq_len
+        idxs = np.zeros((batch_size, seq_len), dtype=np.int)
+        for i in range(batch_size):
+            idxs[i] = np.arange(idx[i], idx[i] + seq_len)
         return idxs.transpose().reshape(-1)
 
-    def sample_multi_view(self, n, L):
+    def sample_multi_view(self, batch_size, seq_len):
         # start = time.time()
-        idxs = self._sample_sequential_idx(n, L)
+        idxs = self._sample_sequential_idx(batch_size, seq_len)
         obses = self.obses[idxs]
         pos = obses.copy()
 
@@ -81,16 +81,16 @@ class ReplayBuffer(Dataset):
         pos = random_crop(pos, out=self.image_size)
 
         obses = torch.as_tensor(obses, device=self.device).float()\
-            .reshape(L, n, *obses.shape[-3:])
+            .reshape(seq_len, batch_size, *obses.shape[-3:])
         actions = torch.as_tensor(self.actions[idxs], device=self.device)\
-            .reshape(L, n, -1)
+            .reshape(seq_len, batch_size, -1)
         rewards = torch.as_tensor(self.rewards[idxs], device=self.device)\
-            .reshape(L, n)
+            .reshape(seq_len, batch_size)
         not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)\
-            .reshape(L, n)
+            .reshape(seq_len, batch_size)
 
         pos = torch.as_tensor(pos, device=self.device).float()\
-            .reshape(L, n, *obses.shape[-3:])
+            .reshape(seq_len, batch_size, *obses.shape[-3:])
         mib_kwargs = dict(view1=obses, view2=pos,
                           time_anchor=None, time_pos=None)
 
