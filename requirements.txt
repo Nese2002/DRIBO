@@ -1,0 +1,9 @@
+av==16.0.1
+dm_control==1.0.34
+dm_env==1.6
+gymnasium==1.2.3
+imageio==2.37.2
+numpy==2.4.1
+opencv_python==4.12.0.88
+torch==2.0.1
+tqdm==4.67.1

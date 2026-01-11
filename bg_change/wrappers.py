@@ -167,7 +167,9 @@ class DMCWrapper(gym.Env):
         return self._norm_action_space
 
     def seed(self, seed=None):
-
+        """
+        Gymnasium seed() returns a tuple of seeds.
+        """
         if seed is not None:
             self._seed = seed
         self._true_action_space.seed(self._seed)
@@ -176,7 +178,11 @@ class DMCWrapper(gym.Env):
         return (self._seed,)
 
     def step(self, action):
-
+        """
+        Gymnasium step() returns 5 values: obs, reward, terminated, truncated, info
+        - terminated: episode ended due to task completion/failure
+        - truncated: episode ended due to time limit
+        """
         assert self._norm_action_space.contains(action)
         action = self._convert_action(action)
         assert self._true_action_space.contains(action)
@@ -193,14 +199,19 @@ class DMCWrapper(gym.Env):
         obs = self._get_noisy_obs(time_step)
         self._frames.append(obs)
         info['discount'] = time_step.discount
-       
+        
+        # In DMC, episodes end naturally (terminated=True, truncated=False)
+        # If you want to handle time limits separately, you'd need to track steps
         terminated = done
         truncated = False
         
         return self._get_obs(), reward, terminated, truncated, info
 
     def reset(self, seed=None, options=None):
-        
+        """
+        Gymnasium reset() returns (obs, info) tuple.
+        seed parameter allows resetting with a new seed.
+        """
         if seed is not None:
             self.seed(seed)
             
@@ -213,7 +224,7 @@ class DMCWrapper(gym.Env):
         return self._get_obs(), info
 
     def _render_frame(self, height=None, width=None, camera_id=0):
-
+        """Internal rendering method."""
         height = height or self._height
         width = width or self._width
         camera_id = camera_id or self._camera_id
@@ -222,7 +233,12 @@ class DMCWrapper(gym.Env):
         )
 
     def render(self):
-
+        """
+        Gymnasium render() API:
+        - No mode parameter (set via render_mode in __init__)
+        - Returns the rendered frame for rgb_array mode
+        - Returns None for human mode (displays directly)
+        """
         if self.render_mode == "rgb_array":
             obs = self._render_frame(
                 height=self._height,
