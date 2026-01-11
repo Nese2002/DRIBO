@@ -26,7 +26,7 @@ class ReplayBuffer(Dataset):
         capacity,
         batch_size,
         device,
-        path_len=None,
+        episode_len=None,
         image_size=84,
         transform=None
     ):
@@ -37,7 +37,7 @@ class ReplayBuffer(Dataset):
         self.transform = transform
         obs_dtype = np.uint8
 
-        self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
+        self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype) #[capacity, T, B, C, H, W]
         self.next_obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
         self.actions = np.empty((capacity, *action_shape), dtype=np.float32)
         self.rewards = np.empty((capacity, 1), dtype=np.float32)
@@ -46,7 +46,7 @@ class ReplayBuffer(Dataset):
         self.idx = 0
         self.last_save = 0
         self.full = False
-        self._path_len = path_len
+        self.episode_len = episode_len
 
     def add(self, obs, action, reward, next_obs, done):
 
@@ -60,47 +60,45 @@ class ReplayBuffer(Dataset):
         self.full = self.full or self.idx == 0
 
     
-    def _sample_sequential_idx(self, batch_size, seq_len):
-        idx = np.random.randint(
-            0, self.capacity - seq_len if self.full else self.idx - seq_len, size=batch_size
-        )
-        pos_in_path = idx - idx // self._path_len * self._path_len
-        idx[pos_in_path > self._path_len - seq_len] = idx[pos_in_path > self._path_len - seq_len] // self._path_len * self._path_len + seq_len
-        idxs = np.zeros((batch_size, seq_len), dtype=np.int)
+    def sample_sequential_idxs(self, batch_size, seq_len):
+        # Randomly samples batch_size starting indices
+        last_idx = self.capacity - seq_len if self.full else self.idx - seq_len
+        idx = np.random.randint(0, last_idx, size=batch_size)
+        pos_in_episode = idx % self.episode_len
+
+        # Move index that would cross episode boundaries to a safe start inside the SAME trajectory
+        idx[pos_in_episode > self.episode_len - seq_len] = idx[pos_in_episode > self.episode_len - seq_len] // self.episode_len * self.episode_len + seq_len
+        
+        # Build sequential indices
+        idxs = np.zeros((batch_size, seq_len), dtype=np.int)    #Each row corresponds to one sampled sequence
+                                                                #Each column corresponds to a time step inside that sequence
+        
+        # Fill sequences (idxs[i] is the i-th sequence)
         for i in range(batch_size):
             idxs[i] = np.arange(idx[i], idx[i] + seq_len)
         return idxs.transpose().reshape(-1)
 
     def sample_multi_view(self, batch_size, seq_len):
-        # start = time.time()
-        idxs = self._sample_sequential_idx(batch_size, seq_len)
-        obses = self.obses[idxs]
-        pos = obses.copy()
+        idxs = self.sample_sequential_idxs(batch_size, seq_len)
+        obses = self.obses[idxs] # (batch_size * seq_len, C, H, W) tensor of observations
+        positives = obses.copy()
 
-        obses = random_crop(obses, out=self.image_size)
-        pos = random_crop(pos, out=self.image_size)
+        obses = random_crop(obses, out=self.image_size) # augmented first view
+        positives = random_crop(positives, out=self.image_size) #augmented second view
 
-        obses = torch.as_tensor(obses, device=self.device).float()\
-            .reshape(seq_len, batch_size, *obses.shape[-3:])
-        actions = torch.as_tensor(self.actions[idxs], device=self.device)\
-            .reshape(seq_len, batch_size, -1)
-        rewards = torch.as_tensor(self.rewards[idxs], device=self.device)\
-            .reshape(seq_len, batch_size)
-        not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)\
-            .reshape(seq_len, batch_size)
+        obses = torch.as_tensor(obses, device=self.device).float().reshape(seq_len, batch_size, *obses.shape[-3:]) #(seq_len, batch_size, C, H, W)
+        positives = torch.as_tensor(positives, device=self.device).float().reshape(seq_len, batch_size, *obses.shape[-3:])
+        actions = torch.as_tensor(self.actions[idxs], device=self.device).reshape(seq_len, batch_size, -1)
+        rewards = torch.as_tensor(self.rewards[idxs], device=self.device).reshape(seq_len, batch_size)
+        not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device).reshape(seq_len, batch_size)
 
-        pos = torch.as_tensor(pos, device=self.device).float()\
-            .reshape(seq_len, batch_size, *obses.shape[-3:])
-        mib_kwargs = dict(view1=obses, view2=pos,
-                          time_anchor=None, time_pos=None)
-
-        return obses, actions, rewards, not_dones, mib_kwargs
+        return obses, actions, rewards, not_dones, positives
     
     
     def save(self, save_dir):
         if self.idx == self.last_save:
             return
-        path = os.path.join(save_dir, '%d_%d.pt' % (self.last_save, self.idx))
+        episode = os.episode.join(save_dir, '%d_%d.pt' % (self.last_save, self.idx))
         payload = [
             self.obses[self.last_save:self.idx],
             self.next_obses[self.last_save:self.idx],
@@ -109,15 +107,15 @@ class ReplayBuffer(Dataset):
             self.not_dones[self.last_save:self.idx]
         ]
         self.last_save = self.idx
-        torch.save(payload, path)
+        torch.save(payload, episode)
 
     def load(self, save_dir):
         chunks = os.listdir(save_dir)
         chucks = sorted(chunks, key=lambda x: int(x.split('_')[0]))
         for chunk in chucks:
             start, end = [int(x) for x in chunk.split('.')[0].split('_')]
-            path = os.path.join(save_dir, chunk)
-            payload = torch.load(path)
+            episode = os.episode.join(save_dir, chunk)
+            payload = torch.load(episode)
             assert self.idx == start
             self.obses[start:end] = payload[0]
             self.next_obses[start:end] = payload[1]

@@ -8,6 +8,12 @@ from RSSM import RSSMEncoder
 from SAC import Actor, Critic
 import DRIBO
 
+def soft_update_params(net, target_net, tau):
+    for param, target_param in zip(net.parameters(), target_net.parameters()):
+        target_param.data.copy_(
+            tau * param.data + (1 - tau) * target_param.data
+        )
+
 class ExponentialScheduler(object):
     def __init__(self, start_value, end_value, n_iterations, start_iteration=0):
         self.log_start = np.log10(start_value)
@@ -17,14 +23,14 @@ class ExponentialScheduler(object):
         self.start_value = start_value
         self.end_value = end_value
 
-    def __call__(self, step):
-        if step <= self.start_iteration:
+    def __call__(self, t):
+        if t <= self.start_iteration:
             return self.start_value
-        elif step > self.start_iteration + self.n_iterations:
+        elif t > self.start_iteration + self.n_iterations:
             return self.end_value
         else:
-            t = step - self.start_iteration
-            alpha = t / self.n_iterations
+            step = t - self.start_iteration
+            alpha = step / self.n_iterations
             log_value = self.log_start + alpha * (self.log_end - self.log_start)
             return np.power(10., log_value)
         
@@ -136,11 +142,11 @@ class DRIBOSacAgent(object):
     def alpha(self):
         return self.log_alpha.exp()
     
-    def update(self, replay_buffer, step):
-        obses, actions, reward, not_done = replay_buffer.sample_multi_view(self.batch_size, self.seq_len)
+    def update(self, replay_buffer, t):
+        obses, actions, rewards, not_done = replay_buffer.sample_multi_view(self.batch_size, self.seq_len)
 
         flat_actions = actions[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
-        rewards = reward[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
+        rewards = rewards[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
         not_done = not_done[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
 
         #latent states
@@ -155,3 +161,39 @@ class DRIBOSacAgent(object):
         _, target_post = self.DRIBO.encode(obses, actions, ema=True)
         target_feature = torch.cat([target_post.stoch, target_post.det], dim=-1)
         target_next_latent_states = target_feature[1:].reshape((self.seq_len-1) * self.batch_size,-1).detach()
+
+        self.update_critic(q_latent_states, flat_actions, rewards, next_latent_states, target_next_latent_states, not_done, t)
+
+        if t % self.actor_update_freq == 0:
+            self.update_actor_and_alpha(latent_states, t)
+
+        if t % self.critic_target_update_freq == 0:
+            soft_update_params(
+                self.critic.Q1, self.critic_target.Q1, self.critic_tau
+            )
+            soft_update_params(
+                self.critic.Q2, self.critic_target.Q2, self.critic_tau
+            )
+            soft_update_params(
+                self.encoder, self.encoder_target,
+                self.encoder_tau
+            )
+
+        if t % self.mib_update_freq == 0:
+            self.update_mib(obs1, obs2, action, mib_kwargs, L, step)
+
+
+    def update_critic(self, q_latent_states, flat_actions, rewards, next_latent_states, target_next_latent_states, not_done, t):
+        with torch.no_grad():
+            _, policy_action, log_pi, _ = self.actor(next_latent_states)
+            target_Q1, target_Q2 = self.critic_target(target_next_latent_states, policy_action)
+            target_V = torch.min(target_Q1, target_Q2) - self.alpha.detach() * log_pi
+            target_Q = rewards + (not_done * self.discount * target_V)
+
+            current_Q1, current_Q2 = self.critic(q_latent_states, flat_actions)
+            critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+            self.critic_optimizer.zero_grad()
+            critic_loss.backward()
+            self.critic_optimizer.step()
+
+            
