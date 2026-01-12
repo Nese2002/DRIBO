@@ -192,7 +192,7 @@ class DRIBOSacAgent(object):
         not_done = not_done[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
 
         #latent states
-        _, post = self.DRIBO.encode(obses, actions)
+        prior, post = self.DRIBO.encode(obses, actions)
         feature = torch.cat([post.stoch, post.det], dim=-1)
 
         latent_states = feature[:-1].reshape((self.seq_len-1) * self.batch_size,-1).detach()
@@ -222,7 +222,7 @@ class DRIBOSacAgent(object):
             )
 
         if t % self.mib_update_freq == 0:
-            self.update_mib(obses, positives, actions, t)
+            self.update_mib(prior, post, positives, actions, t)
 
 
     def update_critic(self, q_latent_states, flat_actions, rewards, next_latent_states, target_next_latent_states, not_done, t):
@@ -257,9 +257,8 @@ class DRIBOSacAgent(object):
         alpha_loss.backward()
         self.log_alpha_optimizer.step()
 
-    def update_mib(self, obses1, obses2, actions, t):
-        seq_len, batch_size, ch, h, w  = obses1.size()
-        s1_prior, s1 = self.DRIBO.encode(obses1, actions)
+    def update_mib(self, s1_prior, s1, obses2, actions, t):
+        seq_len, batch_size, ch, h, w  = obses2.size()
         s2_prior, s2 = self.DRIBO.encode(obses2, actions, ema=True)
 
         # Maximize mutual information of task-relevant features
