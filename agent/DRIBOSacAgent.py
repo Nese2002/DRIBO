@@ -53,7 +53,7 @@ class DRIBOSacAgent(object):
         actions_shape,
         #general
         device,
-        hidden_dim=512,
+        hidden_dim=256,
         #critic
         discount=0.99,
         init_temperature=0.1,
