@@ -4,6 +4,23 @@ import os
 from collections import deque, namedtuple
 from torch.utils.data import Dataset
 
+def random_crop_gpu(imgs, out=84):
+    """GPU-accelerated random crop"""
+    # imgs: torch tensor on GPU (N, C, H, W)
+    n, c, h, w = imgs.shape
+    crop_max = h - out
+    
+    # Random crop coordinates
+    w1 = torch.randint(0, crop_max + 1, (n,), device=imgs.device)
+    h1 = torch.randint(0, crop_max + 1, (n,), device=imgs.device)
+    
+    # Crop all images in parallel on GPU
+    cropped = torch.empty((n, c, out, out), dtype=imgs.dtype, device=imgs.device)
+    for i in range(n):
+        cropped[i] = imgs[i, :, h1[i]:h1[i] + out, w1[i]:w1[i] + out]
+    
+    return cropped
+
 def random_crop(imgs, out=84):
 
     n, c, h, w = imgs.shape
@@ -34,11 +51,12 @@ class ReplayBuffer(Dataset):
         self.transform = transform
         obs_dtype = np.uint8
 
-        self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype) #[capacity, T, B, C, H, W]
-        self.next_obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
-        self.actions = np.empty((capacity, *action_shape), dtype=np.float32)
-        self.rewards = np.empty((capacity, 1), dtype=np.float32)
-        self.not_dones = np.empty((capacity, 1), dtype=np.float32)
+        # ✅ Store on GPU directly (as uint8 to save memory)
+        self.obses = torch.empty((capacity, *obs_shape), dtype=torch.uint8, device=device)
+        self.actions = torch.empty((capacity, *action_shape), dtype=torch.float32, device=device)
+        self.rewards = torch.empty((capacity, 1), dtype=torch.float32, device=device)
+        self.not_dones = torch.empty((capacity, 1), dtype=torch.float32, device=device)
+        
 
         self.idx = 0
         self.last_save = 0
@@ -47,12 +65,11 @@ class ReplayBuffer(Dataset):
 
     def add(self, obs, action, reward, next_obs, done):
 
-        np.copyto(self.obses[self.idx], obs)
-        np.copyto(self.actions[self.idx], action)
-        np.copyto(self.rewards[self.idx], reward)
-        np.copyto(self.next_obses[self.idx], next_obs)
-        np.copyto(self.not_dones[self.idx], not done)
-
+        self.obses[self.idx].copy_(torch.from_numpy(obs))
+        self.actions[self.idx].copy_(torch.from_numpy(action))
+        self.rewards[self.idx] = reward
+        self.not_dones[self.idx] = not done
+        
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
 
@@ -77,17 +94,22 @@ class ReplayBuffer(Dataset):
 
     def sample_multi_view(self, batch_size, seq_len):
         idxs = self.sample_sequential_idxs(batch_size, seq_len)
-        obses = self.obses[idxs] # (batch_size * seq_len, C, H, W) tensor of observations
-        positives = obses.copy()
-
-        obses = random_crop(obses, out=self.image_size) # augmented first view
-        positives = random_crop(positives, out=self.image_size) #augmented second view
-
-        obses = torch.as_tensor(obses, device=self.device).float().reshape(seq_len, batch_size, *obses.shape[-3:]) #(seq_len, batch_size, C, H, W)
-        positives = torch.as_tensor(positives, device=self.device).float().reshape(seq_len, batch_size, *obses.shape[-3:])
-        actions = torch.as_tensor(self.actions[idxs], device=self.device).reshape(seq_len, batch_size, -1)
-        rewards = torch.as_tensor(self.rewards[idxs], device=self.device).reshape(seq_len, batch_size)
-        not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device).reshape(seq_len, batch_size)
+        
+        # ✅ Already on GPU!
+        obses = self.obses[idxs]
+        positives = self.obses[idxs]
+        
+        # ✅ Crop on GPU
+        obses = random_crop_gpu(obses, out=self.image_size).float()
+        positives = random_crop_gpu(positives, out=self.image_size).float()
+        
+        # Reshape
+        obses = obses.reshape(seq_len, batch_size, *obses.shape[-3:])
+        positives = positives.reshape(seq_len, batch_size, *positives.shape[-3:])
+        
+        actions = self.actions[idxs].reshape(seq_len, batch_size, -1)
+        rewards = self.rewards[idxs].reshape(seq_len, batch_size)
+        not_dones = self.not_dones[idxs].reshape(seq_len, batch_size)
 
         return obses, positives, actions, rewards, not_dones
     
