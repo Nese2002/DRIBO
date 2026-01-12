@@ -7,7 +7,9 @@ import argparse
 import os
 import time
 from tqdm import tqdm
-from google.colab import files
+from google.colab import drive
+drive.mount('/content/drive', force_remount=False)
+
 
 from utils.video_recorder import VideoRecorder
 from agent.ReplayBuffer import ReplayBuffer
@@ -128,6 +130,9 @@ def main():
     num_eval_episodes = 1
     init_step = 1000
 
+    base_dir = "/content/drive/MyDrive/DRIBO_logs"
+    print(f"✅ Saving to Google Drive: {base_dir}") 
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     setup_cuda_optimization()
     
@@ -162,7 +167,7 @@ def main():
 
     # make directory
     env_name = domain_name + '-' + task_name
-    work_dir = "./log" + '/' + env_name
+    work_dir = os.path.join(base_dir, env_name) #"./log" + '/' + env_name
     os.makedirs(work_dir, exist_ok=True)  
     video_dir = os.path.join(work_dir, 'video')
     os.makedirs(video_dir, exist_ok=True)
@@ -238,9 +243,9 @@ def main():
                 agent.save_DRIBO(model_dir, t)
                 replay_buffer.save(buffer_dir)
 
-            model_path = os.path.join(model_dir, 'dribo.pt')
-            if os.path.exists(model_path):
-                files.download(model_path)
+            # model_path = os.path.join(model_dir, 'dribo.pt')
+            # if os.path.exists(model_path):
+            #     files.download(model_path)
 
         # if t == profile_start:
         #     print(f"\n🔍 Starting profiler at step {t}")
