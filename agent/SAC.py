@@ -49,7 +49,7 @@ class Actor(nn.Module):
 
         self.fc = nn.Sequential(
             nn.Linear(feature_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, 2 * action_shape[0])
         )
 
@@ -88,7 +88,7 @@ class QFunction(nn.Module):
 
         self.fc = nn.Sequential(
             nn.Linear(feature_dim + action_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, 1)
         )
 
