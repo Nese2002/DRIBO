@@ -85,7 +85,7 @@ def main():
     total_frames = 1000
     save_video = False
 
-    batch_size = 128
+    batch_size = 64
     episode_len = total_frames // frame_skip
     num_train_steps = 880000
     eval_freq = 10000

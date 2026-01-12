@@ -77,7 +77,7 @@ class DRIBOSacAgent(object):
         num_filters=32,
         #DRIBO
         mib_update_freq=1,
-        mib_batch_size=128,
+        mib_batch_size=64,
         mib_seq_len=32,
         beta_start_value=1e-4,
         beta_end_value=1e-3,
