@@ -17,14 +17,14 @@ def flatten_states(rssm_states, batch_shape):
         torch.reshape(rssm_states.mean, (batch_shape, -1)),
         torch.reshape(rssm_states.std, (batch_shape, -1)),
         torch.reshape(rssm_states.stoch, (batch_shape, -1)),
-        torch.reshape(rssm_states.deter, (batch_shape, -1)),
+        torch.reshape(rssm_states.det, (batch_shape, -1)),
     )
 
 
 class ObservationEncoder(nn.Module):
     def __init__(
         self, depth=32, stride=1, shape=(3, 84, 84), output_logits=False,
-        num_layers=4, obs_encoder_feature_dim=50, activation=nn.ReLU
+        num_layers=4, obs_encoder_feature_dim=1024, activation=nn.ReLU
     ):
         super().__init__()
         self.shape = shape
@@ -45,8 +45,10 @@ class ObservationEncoder(nn.Module):
             nn.ReLU(),
         )
 
-        out_dim = 35
-        self.embed_size = depth * out_dim * out_dim
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, *shape)
+            dummy_output = self.convs(dummy_input)
+            self.embed_size = dummy_output.numel() // dummy_output.shape[0]
         
         self.fc = nn.Linear(self.embed_size, obs_encoder_feature_dim)
         self.ln = nn.LayerNorm(obs_encoder_feature_dim)
@@ -73,8 +75,8 @@ class RSSMState:
     def __init__(self, mean, std, stoch, det):
         self.mean = mean
         self.std = std
-        self.s = stoch
-        self.h = det
+        self.stoch = stoch
+        self.det = det
 
     def __getitem__(self, idx):
         return RSSMState(
@@ -156,6 +158,15 @@ class RSSMRepresentation(nn.Module):
             nn.Linear(self.hidden_size,2*self.stoch_size)
         )
 
+    def initial_state(self, batch_size, device):
+        """Initialize the RSSM state with zeros"""
+        return RSSMState(
+            torch.zeros(batch_size, self.stoch_size, device=device),
+            torch.zeros(batch_size, self.stoch_size, device=device),
+            torch.zeros(batch_size, self.stoch_size, device=device),
+            torch.zeros(batch_size, self.det_size, device=device),
+        )
+
     def forward(self,embed_obs,prev_action,prev_state:RSSMState):
         #prior state
         prior_state = self.transition_model(prev_action, prev_state)
@@ -205,9 +216,9 @@ class RSSMRollout(nn.Module):
     
 class RSSMEncoder(nn.Module):
     def __init__(
-    self, obs_shape, actions_shape, obs_encoder_feature_dim=50,
+    self, obs_shape, actions_shape, obs_encoder_feature_dim=1024,
     stochastic_size=30, deterministic_size=200, num_layers=4, num_filters=32,
-    hidden_size=200, dtype=torch.float, output_logits=False, device=None
+    hidden_size=1024, dtype=torch.float, output_logits=False, device=None
     ):
         super().__init__()
         self.obs_shape = obs_shape
@@ -241,13 +252,6 @@ class RSSMEncoder(nn.Module):
         # layer normalization
         # self.ln = nn.LayerNorm(self.obs_encoder_feature_dim)
 
-    def initial_state(self, batch_size, device):
-        return RSSMState(
-            torch.zeros(batch_size, self.stoch_size, device),
-            torch.zeros(batch_size, self.stoch_size, device),
-            torch.zeros(batch_size, self.stoch_size, device),
-            torch.zeros(batch_size, self.det_size, device),
-        )
 
     def forward(self, obs, prev_action, prev_state):
         """
@@ -263,13 +267,9 @@ class RSSMEncoder(nn.Module):
 
         # 2. Initialize if first step
         if prev_action is None:
-            prev_action = torch.zeros(
-                obs.size(0), self.actions_shape, device=self.device
-            )
+            prev_action = torch.zeros(obs.size(0), self.actions_shape, device=self.device)
         if prev_state is None:
-            prev_state = self.initial_state(
-                prev_action.size(0), device=self.device
-            )
+            prev_state = self.representation.initial_state(prev_action.size(0), device=self.device)
 
         # 3. Infer current state using representation network  
         _, state = self.representation(embed_obses, prev_action, prev_state)
@@ -288,7 +288,7 @@ class RSSMEncoder(nn.Module):
         prev_actions = torch.cat([prev_action, prev_actions], dim=0)
         
         # Initialize state
-        prev_state = self.initial_state(batch_size, device=self.device)
+        prev_state = self.representation.initial_state(batch_size, device=self.device)
         
         # Encode all observations at once
         embed_obses = self.observation_encoder(obes)

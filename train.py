@@ -6,6 +6,7 @@ import torch
 import argparse
 import os
 import time
+from tqdm import tqdm
 
 from utils.video_recorder import VideoRecorder
 from agent.ReplayBuffer import ReplayBuffer
@@ -161,7 +162,9 @@ def main():
     episode, episode_reward, terminated = 0, 0, True
     max_mean_ep_reward = 0
 
-    for t in range(num_train_steps):
+    pbar = tqdm(range(num_train_steps), desc="Training")
+
+    for t in pbar:
         # if t %  eval_freq == 0:
         #     mean_ep_reward = evaluate(eval_env, agent, video, args.num_eval_episodes, t)
         #     if mean_ep_reward > max_mean_ep_reward:
@@ -181,7 +184,6 @@ def main():
         # Random exploration phase
         if t < init_step:
             action = env.action_space.sample()
-            print("random smpling ",t,' / ',init_step)
 
         # Policy-based action selection
         else:

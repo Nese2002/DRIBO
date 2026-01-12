@@ -14,6 +14,16 @@ def soft_update_params(net, target_net, tau):
             tau * param.data + (1 - tau) * target_param.data
         )
 
+def center_crop_image(image, output_size):
+    h, w = image.shape[1:]
+    new_h, new_w = output_size, output_size
+
+    top = (h - new_h)//2
+    left = (w - new_w)//2
+
+    image = image[:, top:top + new_h, left:left + new_w]
+    return image
+
 class ExponentialScheduler(object):
     def __init__(self, start_value, end_value, n_iterations, start_iteration=0):
         self.log_start = np.log10(start_value)
@@ -157,13 +167,18 @@ class DRIBOSacAgent(object):
             return mu.cpu().data.numpy().flatten(), mu, prev_state
     
     def sample_action(self, obs, prev_action, prev_state):
+        if obs.shape[-1] != self.image_size:
+            obs = center_crop_image(obs, self.image_size)
+
         with torch.no_grad():
             obs = torch.FloatTensor(obs).to(self.device)
             obs = obs.unsqueeze(0)
-            prev_state = self.encoder(obs, prev_action, prev_state)
-            latent_state = torch.cat([prev_state.stoch, prev_state.det], dim=-1)
+            current_state = self.encoder(obs, prev_action, prev_state)
+            latent_state = torch.cat([current_state.stoch, current_state.det], dim=-1)
             mu, pi, _, _ = self.actor(latent_state, compute_log_pi=False)
-            return pi.cpu().data.numpy().flatten(), pi, prev_state
+            action = pi.squeeze(0).cpu().numpy()
+            
+            return action, pi, current_state
 
 
     #update
@@ -215,16 +230,17 @@ class DRIBOSacAgent(object):
             target_V = torch.min(target_Q1, target_Q2) - self.alpha.detach() * log_pi
             target_Q = rewards + (not_done * self.discount * target_V)
 
-            current_Q1, current_Q2 = self.critic(q_latent_states, flat_actions)
-            critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
-            self.critic_optimizer.zero_grad()
-            critic_loss.backward()
-            self.critic_optimizer.step()
+        current_Q1, current_Q2 = self.critic(q_latent_states, flat_actions)
+        critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+        self.critic_optimizer.zero_grad()
+        critic_loss.backward()
+        self.critic_optimizer.step()
 
-    def update_actor_and_alpha(self, latent_states, L, t):
+    def update_actor_and_alpha(self, latent_states, t):
         _, pi, log_pi, log_std = self.actor(latent_states)
         actor_Q1, actor_Q2 = self.critic(latent_states, pi)
 
+        # detach encoder, so we don't update it with the actor loss
         actor_Q = torch.min(actor_Q1, actor_Q2)
         actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
 

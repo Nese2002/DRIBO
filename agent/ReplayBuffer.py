@@ -67,7 +67,7 @@ class ReplayBuffer(Dataset):
         idx[pos_in_episode > self.episode_len - seq_len] = idx[pos_in_episode > self.episode_len - seq_len] // self.episode_len * self.episode_len + seq_len
         
         # Build sequential indices
-        idxs = np.zeros((batch_size, seq_len), dtype=np.int)    #Each row corresponds to one sampled sequence
+        idxs = np.zeros((batch_size, seq_len), dtype=int)    #Each row corresponds to one sampled sequence
                                                                 #Each column corresponds to a time step inside that sequence
         
         # Fill sequences (idxs[i] is the i-th sequence)
