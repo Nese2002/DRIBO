@@ -7,10 +7,21 @@ import argparse
 import os
 import time
 from tqdm import tqdm
+from google.colab import files
 
 from utils.video_recorder import VideoRecorder
 from agent.ReplayBuffer import ReplayBuffer
 from agent.DRIBOSacAgent import DRIBOSacAgent
+
+def center_crop_image(image, output_size):
+    h, w = image.shape[1:]
+    new_h, new_w = output_size, output_size
+
+    top = (h - new_h)//2
+    left = (w - new_w)//2
+
+    image = image[:, top:top + new_h, left:left + new_w]
+    return image
 
 def setup_cuda_optimization():
     """Configure CUDA/cuDNN for optimal DRIBO training performance"""
@@ -60,6 +71,7 @@ class eval_mode(object):
         return False  
 
 
+
 def main():
 #     video_recorder = VideoRecorder(dir_name='./videos', height=480, width=640)
 #     video_recorder.init(enabled=True)
@@ -105,14 +117,15 @@ def main():
     augmented_img_size = 84
     replay_buffer_capacity = 100000
     resource_files = 'dataset/train/*.avi'
-    eval_resource_files = 'dataset/test/*.avi'
+    eval_resource_files = 'dataset/test/BasketballDunk/*.avi'
     total_frames = 1000
-    save_video = False
+    save_video = True
 
     batch_size = 8
     episode_len = total_frames // frame_skip
     num_train_steps = 220000
-    eval_freq = 10000
+    eval_freq = 10
+    num_eval_episodes = 1
     init_step = 1000
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -136,14 +149,14 @@ def main():
     eval_env = make(
         domain_name=domain_name,
         task_name=task_name,
-        resource_files=resource_files,
+        resource_files=eval_resource_files,
         total_frames=total_frames,
         frame_skip=frame_skip,
         frame_stack=frame_stack,
         seed= 42,
-        width= img_size,
-        height= img_size,
-        render_mode=render,   
+        width= 640,
+        height= 480,
+        render_mode="rgb_array",   
         extra='eval',
     )
 
@@ -159,7 +172,7 @@ def main():
     os.makedirs(buffer_dir, exist_ok=True)
     
     if(save_video):
-        video = VideoRecorder(video_dir)
+        video = VideoRecorder(dir_name=video_dir, height=480, width=640)
 
     # Shape definition
     action_shape = env.action_space.shape
@@ -196,21 +209,47 @@ def main():
     profile_end = profile_start + 10  # Profile 10 steps
 
     for t in pbar:
-        # if t %  eval_freq == 0:
-        #     mean_ep_reward = evaluate(eval_env, agent, video, args.num_eval_episodes, t)
-        #     if mean_ep_reward > max_mean_ep_reward:
-        #         max_mean_ep_reward = mean_ep_reward
-        #         agent.save_DRIBO(model_dir, t)
-        #         replay_buffer.save(buffer_dir)
+        if t>0 and t %  eval_freq == 0:
+            all_ep_rewards = []
+            for i in range(num_eval_episodes):
+                obs_eval,_ = eval_env.reset()
+                prev_state_eval = None
+                prev_action_eval = None
+                video.init(enabled=(i == 0))
+                terminated_eval = False
+                episode_reward_eval = 0
+                while not terminated_eval:
+                    # center crop image
+                    obs_eval = center_crop_image(obs_eval, augmented_img_size)
+                    with eval_mode(agent):
+                            action_eval, prev_action_eval, prev_state_eval = agent.select_action(obs_eval, prev_action_eval, prev_state_eval)
+                    obs_eval, reward_eval, terminated_eval, truncated_eval, info_eval = eval_env.step(action_eval)
+                    video.record(eval_env)
+                    episode_reward_eval += reward_eval
 
-        if t == profile_start:
-            print(f"\n🔍 Starting profiler at step {t}")
-            profiler = profile(
-                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-                record_shapes=True,
-                with_stack=True
-            )
-            profiler.__enter__()
+                video.save('%d.mp4' % t)
+                all_ep_rewards.append(episode_reward_eval)
+            
+            mean_ep_reward = np.mean(all_ep_rewards)
+            best_ep_reward = np.max(all_ep_rewards)
+            # mean_ep_reward = evaluate(eval_env, agent, video, args.num_eval_episodes, t)
+            if mean_ep_reward > max_mean_ep_reward:
+                max_mean_ep_reward = mean_ep_reward
+                agent.save_DRIBO(model_dir, t)
+                replay_buffer.save(buffer_dir)
+
+            model_path = os.path.join(model_dir, 'dribo.pt')
+            if os.path.exists(model_path):
+                files.download(model_path)
+
+        # if t == profile_start:
+        #     print(f"\n🔍 Starting profiler at step {t}")
+        #     profiler = profile(
+        #         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        #         record_shapes=True,
+        #         with_stack=True
+        #     )
+        #     profiler.__enter__()
 
         if terminated:
             obs,_ = env.reset()
@@ -244,24 +283,24 @@ def main():
         episode_step += 1
 
         # Stop profiler and print results
-        if t == profile_end and profiler is not None:
-            profiler.__exit__(None, None, None)
-            print("\n" + "="*80)
-            print("PROFILING RESULTS")
-            print("="*80)
-            print(profiler.key_averages().table(
-                sort_by="cuda_time_total", 
-                row_limit=20
-            ))
+        # if t == profile_end and profiler is not None:
+        #     profiler.__exit__(None, None, None)
+        #     print("\n" + "="*80)
+        #     print("PROFILING RESULTS")
+        #     print("="*80)
+        #     print(profiler.key_averages().table(
+        #         sort_by="cuda_time_total", 
+        #         row_limit=20
+        #     ))
             
-            # Save detailed trace for Chrome
-            trace_path = os.path.join(work_dir, 'profile_trace.json')
-            profiler.export_chrome_trace(trace_path)
-            print(f"\n💾 Detailed trace saved to: {trace_path}")
-            print("   View in Chrome at: chrome://tracing")
-            print("="*80 + "\n")
+        #     # Save detailed trace for Chrome
+        #     trace_path = os.path.join(work_dir, 'profile_trace.json')
+        #     profiler.export_chrome_trace(trace_path)
+        #     print(f"\n💾 Detailed trace saved to: {trace_path}")
+        #     print("   View in Chrome at: chrome://tracing")
+        #     print("="*80 + "\n")
             
-            profiler = None  # Clear profiler
+        #     profiler = None  # Clear profiler
     
 
 if __name__ == '__main__':

@@ -95,7 +95,7 @@ class ReplayBuffer(Dataset):
     def save(self, save_dir):
         if self.idx == self.last_save:
             return
-        episode = os.episode.join(save_dir, '%d_%d.pt' % (self.last_save, self.idx))
+        episode = os.path.join(save_dir, '%d_%d.pt' % (self.last_save, self.idx))
         payload = [
             self.obses[self.last_save:self.idx],
             self.next_obses[self.last_save:self.idx],
@@ -108,10 +108,10 @@ class ReplayBuffer(Dataset):
 
     def load(self, save_dir):
         chunks = os.listdir(save_dir)
-        chucks = sorted(chunks, key=lambda x: int(x.split('_')[0]))
-        for chunk in chucks:
+        chunks = sorted(chunks, key=lambda x: int(x.split('_')[0]))
+        for chunk in chunks:
             start, end = [int(x) for x in chunk.split('.')[0].split('_')]
-            episode = os.episode.join(save_dir, chunk)
+            episode = os.path.join(save_dir, chunk)
             payload = torch.load(episode)
             assert self.idx == start
             self.obses[start:end] = payload[0]

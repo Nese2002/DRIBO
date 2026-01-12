@@ -282,3 +282,9 @@ class DRIBOSacAgent(object):
         loss.backward()
         self.encoder_optimizer.step()
         self.DRIBO_optimizer.step()
+
+    def save_DRIBO(self, model_dir, step):
+        params = dict(DRIBO=self.DRIBO, encoder=self.encoder, actor=self.actor)
+        torch.save(
+            params, '%s/dribo.pt' % (model_dir)
+        )
