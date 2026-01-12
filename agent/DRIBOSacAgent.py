@@ -99,6 +99,10 @@ class DRIBOSacAgent(object):
         # self.grad_clip = grad_clip
         self.kl_balancing = kl_balancing
 
+
+        self.scaler = torch.amp.GradScaler('cuda')
+
+
         #rssm
         self.encoder = RSSMEncoder( obses_shape, actions_shape, obs_encoder_feature_dim,
             stochastic_size, deterministic_size, num_layers,num_filters, hidden_dim, device=device)
@@ -191,96 +195,117 @@ class DRIBOSacAgent(object):
         rewards = rewards[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
         not_done = not_done[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
 
-        #latent states
-        _, post = self.DRIBO.encode(obses, actions)
-        feature = torch.cat([post.stoch, post.det], dim=-1)
+        # Wrap encoding in autocast
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            _, post = self.DRIBO.encode(obses, actions)
+            feature = torch.cat([post.stoch, post.det], dim=-1)
 
-        latent_states = feature[:-1].reshape((self.seq_len-1) * self.batch_size,-1).detach()
-        q_latent_states = feature[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
-        next_latent_states = feature[:-1].reshape((self.seq_len-1) * self.batch_size,-1).detach()
+        latent_states = feature[:-1].reshape((self.seq_len-1) * self.batch_size, -1).detach()
+        q_latent_states = feature[:-1].reshape((self.seq_len-1) * self.batch_size, -1)
+        next_latent_states = feature[:-1].reshape((self.seq_len-1) * self.batch_size, -1).detach()
 
-        #target latent states
-        _, target_post = self.DRIBO.encode(obses, actions, ema=True)
-        target_feature = torch.cat([target_post.stoch, target_post.det], dim=-1)
-        target_next_latent_states = target_feature[1:].reshape((self.seq_len-1) * self.batch_size,-1).detach()
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            _, target_post = self.DRIBO.encode(obses, actions, ema=True)
+            target_feature = torch.cat([target_post.stoch, target_post.det], dim=-1)
+        
+        target_next_latent_states = target_feature[1:].reshape((self.seq_len-1) * self.batch_size, -1).detach()
 
-        self.update_critic(q_latent_states, flat_actions, rewards, next_latent_states, target_next_latent_states, not_done, t)
+        self.update_critic(q_latent_states, flat_actions, rewards, 
+                          next_latent_states, target_next_latent_states, not_done, t)
 
         if t % self.actor_update_freq == 0:
             self.update_actor_and_alpha(latent_states, t)
 
         if t % self.critic_target_update_freq == 0:
-            soft_update_params(
-                self.critic.Q1, self.critic_target.Q1, self.critic_tau
-            )
-            soft_update_params(
-                self.critic.Q2, self.critic_target.Q2, self.critic_tau
-            )
-            soft_update_params(
-                self.encoder, self.encoder_target,
-                self.encoder_tau
-            )
+            soft_update_params(self.critic.Q1, self.critic_target.Q1, self.critic_tau)
+            soft_update_params(self.critic.Q2, self.critic_target.Q2, self.critic_tau)
+            soft_update_params(self.encoder, self.encoder_target, self.encoder_tau)
 
         if t % self.mib_update_freq == 0:
             self.update_mib(obses, positives, actions, t)
 
 
     def update_critic(self, q_latent_states, flat_actions, rewards, next_latent_states, target_next_latent_states, not_done, t):
-        with torch.no_grad():
-            _, policy_action, log_pi, _ = self.actor(next_latent_states)
-            target_Q1, target_Q2 = self.critic_target(target_next_latent_states, policy_action)
-            target_V = torch.min(target_Q1, target_Q2) - self.alpha.detach() * log_pi
-            target_Q = rewards + (not_done * self.discount * target_V)
-
-        current_Q1, current_Q2 = self.critic(q_latent_states, flat_actions)
-        critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
         self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        self.critic_optimizer.step()
+        
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            with torch.no_grad():
+                _, policy_action, log_pi, _ = self.actor(next_latent_states)
+                target_Q1, target_Q2 = self.critic_target(target_next_latent_states, policy_action)
+                target_V = torch.min(target_Q1, target_Q2) - self.alpha.detach() * log_pi
+                target_Q = rewards + (not_done * self.discount * target_V)
+
+            current_Q1, current_Q2 = self.critic(q_latent_states, flat_actions)
+            critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+
+        self.scaler.scale(critic_loss).backward()
+        self.scaler.step(self.critic_optimizer)
+        self.scaler.update
 
     def update_actor_and_alpha(self, latent_states, t):
-        _, pi, log_pi, log_std = self.actor(latent_states)
-        actor_Q1, actor_Q2 = self.critic(latent_states, pi)
-
-        # detach encoder, so we don't update it with the actor loss
-        actor_Q = torch.min(actor_Q1, actor_Q2)
-        actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
-
-        # optimize the actor
+        """Update actor and alpha with mixed precision"""
+        
+        # ============ Update Actor ============
         self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
-
+        
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            _, pi, log_pi, log_std = self.actor(latent_states)
+            actor_Q1, actor_Q2 = self.critic(latent_states, pi)
+            
+            # detach encoder, so we don't update it with the actor loss
+            actor_Q = torch.min(actor_Q1, actor_Q2)
+            actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
+        
+        # Backward with scaling
+        self.scaler.scale(actor_loss).backward()
+        self.scaler.step(self.actor_optimizer)
+        self.scaler.update()
+        
+        # ============ Update Alpha ============
         self.log_alpha_optimizer.zero_grad()
-        alpha_loss = (self.alpha * (-log_pi - self.target_entropy).detach()).mean()
+        
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            # Recompute log_pi or use detached version from above
+            alpha_loss = (self.alpha * (-log_pi.detach() - self.target_entropy)).mean()
+        
+        # Backward with scaling
+        self.scaler.scale(alpha_loss).backward()
+        self.scaler.step(self.log_alpha_optimizer)
+        self.scaler.update()
 
-        alpha_loss.backward()
-        self.log_alpha_optimizer.step()
 
     def update_mib(self, obses1, obses2, actions, t):
-        seq_len, batch_size, ch, h, w  = obses1.size()
-        s1_prior, s1 = self.DRIBO.encode(obses1, actions)
-        s2_prior, s2 = self.DRIBO.encode(obses2, actions, ema=True)
-
-        # Maximize mutual information of task-relevant features
-        latent_states1 =torch.cat([s1.stoch, s1.det], dim=-1).reshape(seq_len * batch_size, -1)
-        latent_states2 = torch.cat([s2.stoch, s2.det], dim=-1).reshape(seq_len * batch_size, -1)
-
-        logits = self.DRIBO.compute_logits(latent_states1, latent_states2)
-        labels = torch.arange(logits.shape[0]).long().to(self.device)
-        loss = self.cross_entropy_loss(logits, labels)
-
-        # Minimize the task-irrelevant information
-        s1_dist = td.independent.Independent(td.Normal(s1.mean, s1.std), 1)
-        s2_dist = td.independent.Independent(td.Normal(s2.mean, s2.std), 1)
-        skl = self.DRIBO.compute_skl(s1_dist, s2_dist)
-        kl_balancing = self.DRIBO.compute_kl_balancing(s1_prior, s1)
-        beta = self.beta_scheduler(t)
-        loss += beta * kl_balancing
-        loss += beta * skl
-
+        """Update MIB with mixed precision"""
+        
+        seq_len, batch_size, ch, h, w = obses1.size()
+        
         self.encoder_optimizer.zero_grad()
         self.DRIBO_optimizer.zero_grad()
-        loss.backward()
-        self.encoder_optimizer.step()
-        self.DRIBO_optimizer.step()
+        
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            # Encode observations
+            s1_prior, s1 = self.DRIBO.encode(obses1, actions)
+            s2_prior, s2 = self.DRIBO.encode(obses2, actions, ema=True)
+
+            # Maximize mutual information of task-relevant features
+            latent_states1 = torch.cat([s1.stoch, s1.det], dim=-1).reshape(seq_len * batch_size, -1)
+            latent_states2 = torch.cat([s2.stoch, s2.det], dim=-1).reshape(seq_len * batch_size, -1)
+
+            logits = self.DRIBO.compute_logits(latent_states1, latent_states2)
+            labels = torch.arange(logits.shape[0]).long().to(self.device)
+            loss = self.cross_entropy_loss(logits, labels)
+
+            # Minimize the task-irrelevant information
+            s1_dist = td.independent.Independent(td.Normal(s1.mean, s1.std), 1)
+            s2_dist = td.independent.Independent(td.Normal(s2.mean, s2.std), 1)
+            skl = self.DRIBO.compute_skl(s1_dist, s2_dist)
+            kl_balancing = self.DRIBO.compute_kl_balancing(s1_prior, s1)
+            beta = self.beta_scheduler(t)
+            loss += beta * kl_balancing
+            loss += beta * skl
+        
+        # Backward with scaling
+        self.scaler.scale(loss).backward()
+        self.scaler.step(self.encoder_optimizer)
+        self.scaler.step(self.DRIBO_optimizer)
+        self.scaler.update()
