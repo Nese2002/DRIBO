@@ -124,7 +124,7 @@ def main():
     batch_size = 8
     episode_len = total_frames // frame_skip
     num_train_steps = 220000
-    eval_freq = 10
+    eval_freq = 5000
     num_eval_episodes = 1
     init_step = 1000
 
@@ -213,7 +213,7 @@ def main():
     profile_end = profile_start + 10  # Profile 10 steps
 
     for t in pbar:
-        if t>0 and t %  eval_freq == 0:
+        if t> init_step and t %  eval_freq == 0:
             all_ep_rewards = []
             for i in range(num_eval_episodes):
                 obs_eval,_ = eval_env.reset()
