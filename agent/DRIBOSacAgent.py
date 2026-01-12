@@ -126,15 +126,15 @@ class DRIBOSacAgent(object):
         self.DRIBO = DRIBO(obses_shape, feature_dim,self.encoder, self.encoder_target, self.device).to(device)
 
         #optimizers
-        self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=encoder_lr)
+        self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=encoder_lr, fused=True)
 
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr, fused=True)
 
-        self.critic_optimizer = torch.optim.Adam([{'params': self.critic.parameters()},{'params': self.encoder.parameters()}],lr=critic_lr)
+        self.critic_optimizer = torch.optim.Adam([{'params': self.critic.parameters()},{'params': self.encoder.parameters()}],lr=critic_lr, fused=True)
 
-        self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_lr, betas=(alpha_beta, 0.999))
+        self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_lr, betas=(alpha_beta, 0.999), fused=True)
 
-        self.DRIBO_optimizer = torch.optim.Adam(self.DRIBO.encoder.parameters(), lr=encoder_lr)
+        self.DRIBO_optimizer = torch.optim.Adam(self.DRIBO.encoder.parameters(), lr=encoder_lr, fused=True)
 
         self.beta_scheduler = ExponentialScheduler(start_value=beta_start_value, end_value=beta_end_value,n_iterations=5e4, start_iteration=10000)
         
