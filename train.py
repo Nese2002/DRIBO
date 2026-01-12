@@ -89,7 +89,7 @@ def main():
     episode_len = total_frames // frame_skip
     num_train_steps = 880000
     eval_freq = 10000
-    init_step = 1000
+    init_step = 10
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -168,7 +168,7 @@ def main():
     
     profiler = None
     profile_start = init_step + 100  # Start profiling after init_step
-    profile_end = profile_start + 100  # Profile 100 steps
+    profile_end = profile_start + 10  # Profile 10 steps
 
     for t in pbar:
         # if t %  eval_freq == 0:
