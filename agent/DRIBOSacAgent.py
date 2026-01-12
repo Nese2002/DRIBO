@@ -113,7 +113,7 @@ class DRIBOSacAgent(object):
         self.target_entropy = -np.prod(actions_shape)
 
         # DRIBO
-        self.DRIBO = DRIBO(obses_shape, feature_dim,self.encoder, self.encoder_target).to(device)
+        self.DRIBO = DRIBO(obses_shape, feature_dim,self.encoder, self.encoder_target, self.device).to(device)
 
         #optimizers
         self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=encoder_lr)

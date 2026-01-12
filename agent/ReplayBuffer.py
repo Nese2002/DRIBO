@@ -1,10 +1,7 @@
 import torch
 import numpy as np
-
 import os
-import sys
 from collections import deque, namedtuple
-import random
 from torch.utils.data import Dataset
 
 def random_crop(imgs, out=84):

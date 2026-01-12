@@ -65,7 +65,7 @@ class DMCWrapper(gym.Env):
         self._camera_id = camera_id
         self._frame_skip = frame_skip
         self.render_mode = render_mode
-
+        self._last_rendered_obs = None
         self._frame_stack = frame_stack
         self._frames = deque([], maxlen=frame_stack)
 
@@ -137,6 +137,9 @@ class DMCWrapper(gym.Env):
         )  # hardcoded for dmc
         bg = self._bg_source.get_image()
         obs[mask] = bg[mask]
+
+        self._last_rendered_obs = obs.copy()
+
         obs = obs.transpose(2, 0, 1).copy()
 
         return obs
@@ -239,22 +242,17 @@ class DMCWrapper(gym.Env):
         - Returns the rendered frame for rgb_array mode
         - Returns None for human mode (displays directly)
         """
+        """Return the cached observation that was actually used."""
         if self.render_mode == "rgb_array":
-            obs = self._render_frame(
-                height=self._height,
-                width=self._width,
-                camera_id=self._camera_id
-            )
-            
-            # Apply background substitution if enabled
-            mask = np.logical_and(
-                (obs[:, :, 2] > obs[:, :, 1]),
-                (obs[:, :, 2] > obs[:, :, 0])
-            )
-            bg = self._bg_source.get_current_image()
-            obs[mask] = bg[mask]
-            
-            return obs
+            if self._last_rendered_obs is not None:
+                return self._last_rendered_obs  # Already has background applied
+            else:
+                # Fallback if render() called before any step
+                return self._render_frame(
+                    height=self._height,
+                    width=self._width,
+                    camera_id=self._camera_id
+                )
         return None
 
     def close(self):
