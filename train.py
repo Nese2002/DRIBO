@@ -85,7 +85,7 @@ def main():
     total_frames = 1000
     save_video = False
 
-    batch_size = 64
+    batch_size = 8
     episode_len = total_frames // frame_skip
     num_train_steps = 880000
     eval_freq = 10000
@@ -164,6 +164,12 @@ def main():
 
     pbar = tqdm(range(num_train_steps), desc="Training")
 
+    from torch.profiler import profile, ProfilerActivity
+    
+    profiler = None
+    profile_start = init_step + 100  # Start profiling after init_step
+    profile_end = profile_start + 100  # Profile 100 steps
+
     for t in pbar:
         # if t %  eval_freq == 0:
         #     mean_ep_reward = evaluate(eval_env, agent, video, args.num_eval_episodes, t)
@@ -171,6 +177,15 @@ def main():
         #         max_mean_ep_reward = mean_ep_reward
         #         agent.save_DRIBO(model_dir, t)
         #         replay_buffer.save(buffer_dir)
+
+        if t == profile_start:
+            print(f"\n🔍 Starting profiler at step {t}")
+            profiler = profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                record_shapes=True,
+                with_stack=True
+            )
+            profiler.__enter__()
 
         if terminated:
             obs,_ = env.reset()
@@ -202,7 +217,26 @@ def main():
 
         obs = next_obs
         episode_step += 1
-    
+
+        # Stop profiler and print results
+        if t == profile_end and profiler is not None:
+            profiler.__exit__(None, None, None)
+            print("\n" + "="*80)
+            print("PROFILING RESULTS")
+            print("="*80)
+            print(profiler.key_averages().table(
+                sort_by="cuda_time_total", 
+                row_limit=20
+            ))
+            
+            # Save detailed trace for Chrome
+            trace_path = os.path.join(work_dir, 'profile_trace.json')
+            profiler.export_chrome_trace(trace_path)
+            print(f"\n💾 Detailed trace saved to: {trace_path}")
+            print("   View in Chrome at: chrome://tracing")
+            print("="*80 + "\n")
+            
+            profiler = None  # Clear profiler
     
 
 if __name__ == '__main__':

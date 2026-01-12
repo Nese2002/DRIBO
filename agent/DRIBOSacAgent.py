@@ -102,9 +102,11 @@ class DRIBOSacAgent(object):
         #rssm
         self.encoder = RSSMEncoder( obses_shape, actions_shape, obs_encoder_feature_dim,
             stochastic_size, deterministic_size, num_layers,num_filters, hidden_dim, device=device)
+        self.encoder = torch.compile(self.encoder)
         
         self.encoder_target = RSSMEncoder( obses_shape, actions_shape, obs_encoder_feature_dim,
             stochastic_size, deterministic_size, num_layers,num_filters, hidden_dim, device=device)
+        self.encoder_target = torch.compile(self.encoder_target)
         self.encoder_target.load_state_dict(self.encoder.state_dict())
 
         feature_dim = stochastic_size + deterministic_size
