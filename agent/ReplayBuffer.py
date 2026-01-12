@@ -27,7 +27,7 @@ def random_crop_gpu(imgs, out=84):
     return cropped
 
 
-class GPUReplayBuffer:
+class ReplayBuffer:
     """
     GPU-based replay buffer that stores everything on GPU to eliminate transfers.
     
