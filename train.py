@@ -128,8 +128,7 @@ def main():
     num_eval_episodes = 1
     init_step = 1000
 
-    from google.colab import drive
-    drive.mount('/content/drive', force_remount=False)
+
     base_dir = "/content/drive/MyDrive/DRIBO_logs"
     print(f"✅ Saving to Google Drive: {base_dir}") 
 
