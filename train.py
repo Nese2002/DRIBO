@@ -113,7 +113,7 @@ def main():
     episode_len = total_frames // frame_skip
     num_train_steps = 880000
     eval_freq = 10000
-    init_step = 50
+    init_step = 1000
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     setup_cuda_optimization()
