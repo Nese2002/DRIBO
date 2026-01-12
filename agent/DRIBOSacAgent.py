@@ -103,20 +103,54 @@ class DRIBOSacAgent(object):
         self.encoder = RSSMEncoder( obses_shape, actions_shape, obs_encoder_feature_dim,
             stochastic_size, deterministic_size, num_layers,num_filters, hidden_dim, device=device)
         # self.encoder = torch.compile(self.encoder)
+
+        # ✅ COMPILE ENCODER SUB-MODULES (not the whole encoder)
+        # Compile the CNN - heavy convolution operations
+        self.encoder.observation_encoder = torch.compile(
+            self.encoder.observation_encoder,
+            mode="default"  # or "reduce-overhead" or "max-autotune"
+        )
+        
+        # Compile RNN components
+        self.encoder.transition = torch.compile(
+            self.encoder.transition,
+            mode="default"
+        )
+        
+        self.encoder.representation = torch.compile(
+            self.encoder.representation,
+            mode="default"
+        )
         
         self.encoder_target = RSSMEncoder( obses_shape, actions_shape, obs_encoder_feature_dim,
             stochastic_size, deterministic_size, num_layers,num_filters, hidden_dim, device=device)
-        self.encoder_target = torch.compile(self.encoder_target)
-        # self.encoder_target.load_state_dict(self.encoder.state_dict())
+        # self.encoder_target = torch.compile(self.encoder_target)
+        self.encoder_target.load_state_dict(self.encoder.state_dict())
+
+        self.encoder_target.observation_encoder = torch.compile(
+            self.encoder_target.observation_encoder,
+            mode="default"
+        )
+        self.encoder_target.transition = torch.compile(
+            self.encoder_target.transition,
+            mode="default"
+        )
+        self.encoder_target.representation = torch.compile(
+            self.encoder_target.representation,
+            mode="default"
+        )
 
         feature_dim = stochastic_size + deterministic_size
 
         #sac
         self.actor = Actor(actions_shape, hidden_dim, feature_dim,actor_log_std_min, actor_log_std_max).to(device)
+        self.actor = torch.compile(self.actor, mode="default")
 
         self.critic = Critic(actions_shape, hidden_dim, feature_dim).to(device)
+        self.critic = torch.compile(self.critic, mode="default")
 
         self.critic_target = Critic(actions_shape, hidden_dim, feature_dim).to(device)
+        self.critic_target = torch.compile(self.critic_target, mode="default")
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         self.log_alpha = torch.tensor(np.log(init_temperature)).to(device)
@@ -192,7 +226,7 @@ class DRIBOSacAgent(object):
         not_done = not_done[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
 
         #latent states
-        prior, post = self.DRIBO.encode(obses, actions)
+        _, post = self.DRIBO.encode(obses, actions)
         feature = torch.cat([post.stoch, post.det], dim=-1)
 
         latent_states = feature[:-1].reshape((self.seq_len-1) * self.batch_size,-1).detach()
@@ -222,7 +256,7 @@ class DRIBOSacAgent(object):
             )
 
         if t % self.mib_update_freq == 0:
-            self.update_mib(prior, post, positives, actions, t)
+            self.update_mib(obses, positives, actions, t)
 
 
     def update_critic(self, q_latent_states, flat_actions, rewards, next_latent_states, target_next_latent_states, not_done, t):
@@ -257,8 +291,9 @@ class DRIBOSacAgent(object):
         alpha_loss.backward()
         self.log_alpha_optimizer.step()
 
-    def update_mib(self, s1_prior, s1, obses2, actions, t):
-        seq_len, batch_size, ch, h, w  = obses2.size()
+    def update_mib(self, obses1, obses2, actions, t):
+        seq_len, batch_size, ch, h, w  = obses1.size()
+        s1_prior, s1 = self.DRIBO.encode(obses1, actions)
         s2_prior, s2 = self.DRIBO.encode(obses2, actions, ema=True)
 
         # Maximize mutual information of task-relevant features
