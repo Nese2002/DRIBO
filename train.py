@@ -77,7 +77,7 @@ def main():
     render = args.render
     frame_skip=1
     frame_stack=1
-    img_size = 1000
+    img_size = 100
     augmented_img_size = 84
     replay_buffer_capacity = 100000
     resource_files = 'dataset/train/*.avi'
@@ -89,7 +89,7 @@ def main():
     episode_len = total_frames // frame_skip
     num_train_steps = 880000
     eval_freq = 10000
-    init_step = 100
+    init_step = 1000
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
