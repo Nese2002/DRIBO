@@ -27,9 +27,11 @@ def random_crop_gpu(imgs, out=84):
     return cropped
 
 
-class ReplayBuffer:
+class GPUReplayBuffer:
     """
     GPU-based replay buffer that stores everything on GPU to eliminate transfers.
+    
+    Storage format: (C, H, W) for single images, automatically converts from (H, W, C) if needed
     
     Tradeoffs:
     - Pro: Zero CPU-GPU transfer during sampling (much faster)
@@ -66,7 +68,13 @@ class ReplayBuffer:
     def add(self, obs, action, reward, next_obs, done):
         """Add single transition - converts numpy to torch and transfers to GPU"""
         # Transfer happens once here (acceptable cost)
-        self.obses[self.idx] = torch.as_tensor(obs, device=self.device)
+        obs_tensor = torch.as_tensor(obs, device=self.device)
+        
+        # ✅ Fix: Transpose if in HWC format (H, W, C) -> (C, H, W)
+        if obs_tensor.dim() == 3 and obs_tensor.shape[-1] in [1, 3, 4]:  # Likely HWC format
+            obs_tensor = obs_tensor.permute(2, 0, 1)
+        
+        self.obses[self.idx] = obs_tensor
         self.actions[self.idx] = torch.as_tensor(action, device=self.device)
         self.rewards[self.idx] = reward
         self.not_dones[self.idx] = not done
@@ -82,7 +90,13 @@ class ReplayBuffer:
         batch_size = obs.shape[0]
         idxs = torch.arange(self.idx, self.idx + batch_size) % self.capacity
         
-        self.obses[idxs] = torch.as_tensor(obs, device=self.device)
+        obs_tensor = torch.as_tensor(obs, device=self.device)
+        
+        # ✅ Fix: Transpose if in HWC format (B, H, W, C) -> (B, C, H, W)
+        if obs_tensor.dim() == 4 and obs_tensor.shape[-1] in [1, 3, 4]:  # Likely BHWC format
+            obs_tensor = obs_tensor.permute(0, 3, 1, 2)
+        
+        self.obses[idxs] = obs_tensor
         self.actions[idxs] = torch.as_tensor(action, device=self.device)
         self.rewards[idxs] = torch.as_tensor(reward, device=self.device).unsqueeze(-1)
         self.not_dones[idxs] = torch.as_tensor(~done, device=self.device).unsqueeze(-1)
@@ -133,8 +147,8 @@ class ReplayBuffer:
         
         # ✅ Get other data (already on GPU)
         actions = self.actions[idxs].reshape(seq_len, batch_size, -1)
-        rewards = self.rewards[idxs].reshape(seq_len, batch_size, -1)
-        not_dones = self.not_dones[idxs].reshape(seq_len, batch_size, -1)
+        rewards = self.rewards[idxs].reshape(seq_len, batch_size)
+        not_dones = self.not_dones[idxs].reshape(seq_len, batch_size)
 
         return obses, positives, actions, rewards, not_dones
     
@@ -174,3 +188,4 @@ class ReplayBuffer:
 
     def __len__(self):
         return self.capacity if self.full else self.idx
+
