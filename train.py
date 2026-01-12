@@ -88,7 +88,7 @@ def main():
     episode_len = total_frames // frame_skip
     num_train_steps = 890000
     eval_freq = 10000
-    init_step = 1000
+    init_step = 100
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -185,7 +185,7 @@ def main():
 
         # Policy-based action selection
         else:
-            with eval_mode(agent):
+            with eval_mode(agent.encoder, agent.actor):
                 action, prev_action, prev_state = agent.sample_action(obs, prev_action, prev_state)
 
         # Training updates

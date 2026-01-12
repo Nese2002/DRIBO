@@ -21,9 +21,9 @@ class DRIBO(nn.Module):
         
         if ema:
             with torch.no_grad():
-                prior, post = self.encoder_target(obses, actions)
+                prior, post = self.encoder_target.encode_sequence(obses, actions)
         else:
-            prior, post = self.encoder(obses, actions)
+            prior, post = self.encoder.encode_sequence(obses, actions)
 
         return prior, post
     

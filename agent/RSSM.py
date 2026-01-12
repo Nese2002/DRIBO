@@ -249,17 +249,47 @@ class RSSMEncoder(nn.Module):
             torch.zeros(batch_size, self.det_size, device),
         )
 
-    def forward(self, obes, actions):
-        seq_len, batch_size, ch, h, w = obes.size()
+    def forward(self, obs, prev_action, prev_state):
+        """
+        Single-step inference
+        Use for action selection
+        """
+        state = self.get_state_representation(obs, prev_action, prev_state)
+        return state
+    
+    def get_state_representation(self, obs, prev_action, prev_state):
+        # 1. Encode pixels to features
+        embed_obses = self.observation_encoder(obs)
 
+        # 2. Initialize if first step
+        if prev_action is None:
+            prev_action = torch.zeros(
+                obs.size(0), self.actions_shape, device=self.device
+            )
+        if prev_state is None:
+            prev_state = self.initial_state(
+                prev_action.size(0), device=self.device
+            )
+
+        # 3. Infer current state using representation network  
+        _, state = self.representation(embed_obses, prev_action, prev_state)
+        return state
+    
+    def encode_sequence(self, obes, actions):
+        """
+        Sequential encoding for trajectory data 
+        Use for representation learning
+        """
+        seq_len, batch_size, ch, h, w = obes.size()
+       
         # Prepare actions with zero padding at start
         prev_actions = actions[:-1]
         prev_action = torch.zeros(batch_size,self.actions_shape, device=self.device, dtype=actions.dtype).unsqueeze(0)
         prev_actions = torch.cat([prev_action, prev_actions], dim=0)
-
+        
         # Initialize state
         prev_state = self.initial_state(batch_size, device=self.device)
-
+        
         # Encode all observations at once
         embed_obses = self.observation_encoder(obes)
 
@@ -269,21 +299,3 @@ class RSSMEncoder(nn.Module):
         )
 
         return prior, posterior
-
-    # def forward(self, obs, prev_action=None, prev_state: RSSMState = None):
-    #     # 1. Encode pixels to features
-    #     embed_obses = self.observation_encoder(obs)
-
-    #     # 2. Initialize if first step
-    #     if prev_action is None:
-    #         prev_action = torch.zeros(
-    #             obs.size(0), self.actions_shape, device=self.device
-    #         )
-    #     if prev_state is None:
-    #         prev_state = self.initial_state(
-    #             prev_action.size(0), device=self.device
-    #         )
-
-    #     # 3. Infer current state using representation network  
-    #     _, state = self.representation(embed_obses, prev_action, prev_state)
-    #     return state

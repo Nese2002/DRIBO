@@ -131,12 +131,16 @@ class DRIBOSacAgent(object):
         self.cross_entropy_loss = nn.CrossEntropyLoss()
 
         #training
+        self.train()
         self.critic_target.train()
         self.encoder_target.train()
-        self.actor.train()
-        self.critic.train()
-        self.encoder.train()
-        self.DRIBO.train()
+        
+    def train(self, training=True):
+        self.training = training
+        self.actor.train(training)
+        self.critic.train(training)
+        self.encoder.train(training)
+        self.DRIBO.train(training)
 
     @property
     def alpha(self):
