@@ -53,7 +53,7 @@ class DRIBOSacAgent(object):
         actions_shape,
         #general
         device,
-        hidden_dim=1024,
+        hidden_dim=512,
         #critic
         discount=0.99,
         init_temperature=0.1,
@@ -68,13 +68,13 @@ class DRIBOSacAgent(object):
         actor_log_std_max=2,
         actor_update_freq=2,
         #rssm
-        obs_encoder_feature_dim=1024,
+        obs_encoder_feature_dim=512,
         stochastic_size=30,
         deterministic_size=200,
         encoder_lr=1e-5,
         encoder_tau=0.05,
         num_layers=4,
-        num_filters=32,
+        num_filters=16,
         #DRIBO
         mib_update_freq=1,
         mib_batch_size=8,
