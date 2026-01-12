@@ -156,6 +156,8 @@ def main():
         device= device
     )
 
+    
+
     episode, episode_reward, terminated = 0, 0, True
     max_mean_ep_reward = 0
 

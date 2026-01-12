@@ -104,6 +104,11 @@ class DRIBOSacAgent(object):
             stochastic_size, deterministic_size, num_layers,num_filters, hidden_dim, device=device)
         # self.encoder = torch.compile(self.encoder)
 
+        self.encoder_target = RSSMEncoder( obses_shape, actions_shape, obs_encoder_feature_dim,
+            stochastic_size, deterministic_size, num_layers,num_filters, hidden_dim, device=device)
+        # self.encoder_target = torch.compile(self.encoder_target)
+        self.encoder_target.load_state_dict(self.encoder.state_dict())
+
         # ✅ COMPILE ENCODER SUB-MODULES (not the whole encoder)
         # Compile the CNN - heavy convolution operations
         self.encoder.observation_encoder = torch.compile(
@@ -122,10 +127,7 @@ class DRIBOSacAgent(object):
             mode="default"
         )
         
-        self.encoder_target = RSSMEncoder( obses_shape, actions_shape, obs_encoder_feature_dim,
-            stochastic_size, deterministic_size, num_layers,num_filters, hidden_dim, device=device)
-        # self.encoder_target = torch.compile(self.encoder_target)
-        self.encoder_target.load_state_dict(self.encoder.state_dict())
+        
 
         self.encoder_target.observation_encoder = torch.compile(
             self.encoder_target.observation_encoder,
@@ -147,11 +149,12 @@ class DRIBOSacAgent(object):
         self.actor = torch.compile(self.actor, mode="default")
 
         self.critic = Critic(actions_shape, hidden_dim, feature_dim).to(device)
-        self.critic = torch.compile(self.critic, mode="default")
 
         self.critic_target = Critic(actions_shape, hidden_dim, feature_dim).to(device)
-        self.critic_target = torch.compile(self.critic_target, mode="default")
         self.critic_target.load_state_dict(self.critic.state_dict())
+        
+        self.critic = torch.compile(self.critic, mode="default")
+        self.critic_target = torch.compile(self.critic_target, mode="default")
 
         self.log_alpha = torch.tensor(np.log(init_temperature)).to(device)
         self.log_alpha.requires_grad = True
