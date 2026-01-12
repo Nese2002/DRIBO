@@ -12,30 +12,6 @@ from utils.video_recorder import VideoRecorder
 from agent.ReplayBuffer import ReplayBuffer
 from agent.DRIBOSacAgent import DRIBOSacAgent
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--domain_name', default='cheetah')
-    parser.add_argument('--task_name', default='run')
-    parser.add_argument('--render', default=None) # "rgb_array" to render
-    args = parser.parse_args()
-    return args
-
-class eval_mode(object):
-    def __init__(self, *models):
-        self.models = models
-
-    def __enter__(self):
-        self.prev_states = []
-        for model in self.models:
-            self.prev_states.append(model.training)
-            model.train(False)
-
-    def __exit__(self, *args):
-        for model, state in zip(self.models, self.prev_states):
-            model.train(state)
-        return False  
-
-
 def setup_cuda_optimization():
     """Configure CUDA/cuDNN for optimal DRIBO training performance"""
     if torch.cuda.is_available():
@@ -60,8 +36,65 @@ def setup_cuda_optimization():
     else:
         print("⚠️  CUDA not available, running on CPU")
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--domain_name', default='cheetah')
+    parser.add_argument('--task_name', default='run')
+    parser.add_argument('--render', default=None) # "rgb_array" to render
+    args = parser.parse_args()
+    return args
+
+class eval_mode(object):
+    def __init__(self, *models):
+        self.models = models
+
+    def __enter__(self):
+        self.prev_states = []
+        for model in self.models:
+            self.prev_states.append(model.training)
+            model.train(False)
+
+    def __exit__(self, *args):
+        for model, state in zip(self.models, self.prev_states):
+            model.train(state)
+        return False  
+
 
 def main():
+#     video_recorder = VideoRecorder(dir_name='./videos', height=480, width=640)
+#     video_recorder.init(enabled=True)
+
+#     env = make(
+#     domain_name='cheetah',
+#     task_name='run',
+#     resource_files='dataset/train/*.avi',
+#     total_frames=1000,
+#     seed=42,
+#     render_mode="rgb_array",   # 🔑 REQUIRED
+# )
+    
+#     obs, info = env.reset(seed=42)
+
+#     for step in range(300):
+#         action = env.action_space.sample()
+
+#         if step % 50 == 0:
+#             print(f"Step {step}, Action: {action}, Obs mean: {obs.mean()}")
+#         obs, reward, terminated, truncated, info = env.step(action)
+#         video_recorder.record(env)
+#         # frame = env.render()  # (H, W, 3), uint8
+#         # cv2.imshow("DMC + Video Background", frame[:, :, ::-1])  # RGB → BGR
+
+#         # if cv2.waitKey(1) & 0xFF == ord('q'):
+#         #     break
+
+#         if terminated or truncated:
+#             obs, info = env.reset()
+    
+#     video_recorder.save('episode_001.mp4')
+#     env.close()
+#     cv2.destroyAllWindows()
+   
     args = parse_args()
     domain_name = args.domain_name
     task_name = args.task_name
@@ -83,13 +116,8 @@ def main():
     init_step = 1000
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # ============================================================
-    # 🔑 ADD CUDA OPTIMIZATION HERE (after device initialization)
-    # ============================================================
     setup_cuda_optimization()
-    # ============================================================
-
+    
     # Create environment 
     env = make(
         domain_name=domain_name,
@@ -238,3 +266,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+    
