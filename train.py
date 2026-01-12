@@ -36,41 +36,32 @@ class eval_mode(object):
         return False  
 
 
+def setup_cuda_optimization():
+    """Configure CUDA/cuDNN for optimal DRIBO training performance"""
+    if torch.cuda.is_available():
+        # Enable cuDNN benchmark mode for faster convolutions
+        # This finds the fastest algorithm for your specific input sizes
+        torch.backends.cudnn.benchmark = True
+        
+        # Allow TensorFloat-32 on Ampere GPUs (RTX 30/40 series)
+        # Provides speedup with minimal accuracy impact
+        # Safe to enable even on older GPUs (will be ignored)
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        
+        print("="*60)
+        print("🚀 CUDA Optimizations Enabled")
+        print("="*60)
+        print(f"  Device: {torch.cuda.get_device_name(0)}")
+        print(f"  cuDNN benchmark: {torch.backends.cudnn.benchmark}")
+        print(f"  cuDNN version: {torch.backends.cudnn.version()}")
+        print(f"  TF32 enabled: {torch.backends.cuda.matmul.allow_tf32}")
+        print("="*60 + "\n")
+    else:
+        print("⚠️  CUDA not available, running on CPU")
+
+
 def main():
-#     video_recorder = VideoRecorder(dir_name='./videos', height=480, width=640)
-#     video_recorder.init(enabled=True)
-
-#     env = make(
-#     domain_name='cheetah',
-#     task_name='run',
-#     resource_files='dataset/train/*.avi',
-#     total_frames=1000,
-#     seed=42,
-#     render_mode="rgb_array",   # 🔑 REQUIRED
-# )
-    
-#     obs, info = env.reset(seed=42)
-
-#     for step in range(300):
-#         action = env.action_space.sample()
-
-#         if step % 50 == 0:
-#             print(f"Step {step}, Action: {action}, Obs mean: {obs.mean()}")
-#         obs, reward, terminated, truncated, info = env.step(action)
-#         video_recorder.record(env)
-#         # frame = env.render()  # (H, W, 3), uint8
-#         # cv2.imshow("DMC + Video Background", frame[:, :, ::-1])  # RGB → BGR
-
-#         # if cv2.waitKey(1) & 0xFF == ord('q'):
-#         #     break
-
-#         if terminated or truncated:
-#             obs, info = env.reset()
-    
-#     video_recorder.save('episode_001.mp4')
-#     env.close()
-#     cv2.destroyAllWindows()
-   
     args = parse_args()
     domain_name = args.domain_name
     task_name = args.task_name
@@ -92,6 +83,12 @@ def main():
     init_step = 1000
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # ============================================================
+    # 🔑 ADD CUDA OPTIMIZATION HERE (after device initialization)
+    # ============================================================
+    setup_cuda_optimization()
+    # ============================================================
 
     # Create environment 
     env = make(
@@ -241,5 +238,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-    
