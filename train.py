@@ -80,7 +80,7 @@ def main():
     episode_len = total_frames // frame_skip
     num_train_steps = 880000
     eval_freq = 10000
-    init_step = 50
+    init_step = 1000
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
@@ -155,8 +155,6 @@ def main():
         actions_shape= action_shape,
         device= device
     )
-
-    
 
     episode, episode_reward, terminated = 0, 0, True
     max_mean_ep_reward = 0
