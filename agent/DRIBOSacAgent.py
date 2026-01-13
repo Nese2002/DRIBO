@@ -69,7 +69,7 @@ class DRIBOSacAgent(object):
         actor_log_std_max=2,
         actor_update_freq=2,
         #rssm
-        obs_encoder_feature_dim=1024,
+        obs_encoder_feature_dim=512,
         stochastic_size=30,
         deterministic_size=200,
         encoder_lr=1e-5,
