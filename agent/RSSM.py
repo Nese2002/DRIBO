@@ -40,9 +40,9 @@ class ObservationEncoder(nn.Module):
             nn.Conv2d(depth,depth,3,stride=stride),
             nn.ReLU(),
             nn.Conv2d(depth,depth,3,stride=stride),
-            nn.ReLU(),
-            nn.Conv2d(depth,depth,3,stride=stride),
-            nn.ReLU(),
+            # nn.ReLU(),
+            # nn.Conv2d(depth,depth,3,stride=stride),
+            # nn.ReLU(),
         )
 
         with torch.no_grad():
