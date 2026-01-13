@@ -54,6 +54,7 @@ class DRIBOSacAgent(object):
         #general
         device,
         hidden_dim=512,
+        log_interval=100, 
         #critic
         discount=0.99,
         init_temperature=0.1,
@@ -68,23 +69,24 @@ class DRIBOSacAgent(object):
         actor_log_std_max=2,
         actor_update_freq=2,
         #rssm
-        obs_encoder_feature_dim=512,
+        obs_encoder_feature_dim=1024,
         stochastic_size=30,
         deterministic_size=200,
         encoder_lr=1e-5,
         encoder_tau=0.05,
         num_layers=4,
-        num_filters=16,
+        num_filters=16, #32
         #DRIBO
         mib_update_freq=1,
         mib_batch_size=8,
         mib_seq_len=32,
-        beta_start_value=1e-4,
-        beta_end_value=1e-3,
+        beta_start_value=1e-3,
+        beta_end_value=1e-1,
         grad_clip=500,#
         kl_balancing=True
     ):
         self.device = device
+        self.log_interval = log_interval
         self.discount = discount
         self.critic_tau = critic_tau
         self.encoder_tau = encoder_tau
@@ -126,7 +128,7 @@ class DRIBOSacAgent(object):
         self.DRIBO = DRIBO(obses_shape, feature_dim,self.encoder, self.encoder_target, self.device).to(device)
 
         #optimizers
-        self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=encoder_lr, fused=True)
+        # self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=encoder_lr, fused=True)
 
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr, fused=True)
 
@@ -134,7 +136,7 @@ class DRIBOSacAgent(object):
 
         self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_lr, betas=(alpha_beta, 0.999), fused=True)
 
-        self.DRIBO_optimizer = torch.optim.Adam(self.DRIBO.encoder.parameters(), lr=encoder_lr, fused=True)
+        self.DRIBO_optimizer = torch.optim.Adam(self.DRIBO.parameters(), lr=encoder_lr, fused=True) #self.DRIBO.encoder.parameters()
 
         self.beta_scheduler = ExponentialScheduler(start_value=beta_start_value, end_value=beta_end_value,n_iterations=5e4, start_iteration=10000)
         
@@ -182,8 +184,11 @@ class DRIBOSacAgent(object):
 
 
     #update
-    def update(self, replay_buffer, t):
+    def update(self, replay_buffer, logger, t):
         obses, positives, actions, rewards, not_done = replay_buffer.sample_multi_view(self.batch_size, self.seq_len)
+        
+        if t % self.log_interval == 0:
+            logger.log('train/batch_reward', rewards.mean(), t)        
 
         flat_actions = actions[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
         rewards = rewards[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
@@ -191,39 +196,31 @@ class DRIBOSacAgent(object):
 
         #latent states
         _, post = self.DRIBO.encode(obses, actions)
-        feature = torch.cat([post.stoch, post.det], dim=-1)
+        feature = torch.cat([post.stoch, post.det], dim=-1) #[32,8,230]
 
         latent_states = feature[:-1].reshape((self.seq_len-1) * self.batch_size,-1).detach()
         q_latent_states = feature[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
-        next_latent_states = feature[:-1].reshape((self.seq_len-1) * self.batch_size,-1).detach()
-
+        next_latent_states = feature[1:].reshape((self.seq_len-1) * self.batch_size,-1).detach()
         #target latent states
         _, target_post = self.DRIBO.encode(obses, actions, ema=True)
         target_feature = torch.cat([target_post.stoch, target_post.det], dim=-1)
         target_next_latent_states = target_feature[1:].reshape((self.seq_len-1) * self.batch_size,-1).detach()
 
-        self.update_critic(q_latent_states, flat_actions, rewards, next_latent_states, target_next_latent_states, not_done, t)
+        self.update_critic(q_latent_states, flat_actions, rewards, next_latent_states, target_next_latent_states, not_done, logger, t)
 
         if t % self.actor_update_freq == 0:
-            self.update_actor_and_alpha(latent_states, t)
+            self.update_actor_and_alpha(latent_states, logger, t)
 
         if t % self.critic_target_update_freq == 0:
-            soft_update_params(
-                self.critic.Q1, self.critic_target.Q1, self.critic_tau
-            )
-            soft_update_params(
-                self.critic.Q2, self.critic_target.Q2, self.critic_tau
-            )
-            soft_update_params(
-                self.encoder, self.encoder_target,
-                self.encoder_tau
-            )
+            soft_update_params(self.critic.Q1, self.critic_target.Q1, self.critic_tau)
+            soft_update_params(self.critic.Q2, self.critic_target.Q2, self.critic_tau)
+            soft_update_params(self.encoder, self.encoder_target, self.encoder_tau)
 
         if t % self.mib_update_freq == 0:
-            self.update_mib(obses, positives, actions, t)
+            self.update_mib(obses, positives, actions, logger, t)
 
 
-    def update_critic(self, q_latent_states, flat_actions, rewards, next_latent_states, target_next_latent_states, not_done, t):
+    def update_critic(self, q_latent_states, flat_actions, rewards, next_latent_states, target_next_latent_states, not_done, logger, t):
         with torch.no_grad():
             _, policy_action, log_pi, _ = self.actor(next_latent_states)
             target_Q1, target_Q2 = self.critic_target(target_next_latent_states, policy_action)
@@ -232,11 +229,17 @@ class DRIBOSacAgent(object):
 
         current_Q1, current_Q2 = self.critic(q_latent_states, flat_actions)
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+
+        if t % self.log_interval == 0:
+            logger.log('train_critic/loss', critic_loss, t)
+
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
 
-    def update_actor_and_alpha(self, latent_states, t):
+        self.critic.log(logger, t, log_interval=self.log_interval)
+
+    def update_actor_and_alpha(self, latent_states, logger, t):
         _, pi, log_pi, log_std = self.actor(latent_states)
         actor_Q1, actor_Q2 = self.critic(latent_states, pi)
 
@@ -244,18 +247,32 @@ class DRIBOSacAgent(object):
         actor_Q = torch.min(actor_Q1, actor_Q2)
         actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
 
+        if t % self.log_interval == 0:
+            logger.log('train_actor/loss', actor_loss, t)
+            logger.log('train_actor/target_entropy', self.target_entropy, t)
+
+        entropy = 0.5 * log_std.shape[1] * (1.0 + np.log(2 * np.pi)) + log_std.sum(dim=-1)
+        if t % self.log_interval == 0:
+            logger.log('train_actor/entropy', entropy.mean(), t)
+
         # optimize the actor
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
 
+        self.actor.log(logger, t, log_interval=self.log_interval)
+
         self.log_alpha_optimizer.zero_grad()
         alpha_loss = (self.alpha * (-log_pi - self.target_entropy).detach()).mean()
+
+        if t % self.log_interval == 0:
+            logger.log('train_alpha/loss', alpha_loss, t)
+            logger.log('train_alpha/value', self.alpha, t)
 
         alpha_loss.backward()
         self.log_alpha_optimizer.step()
 
-    def update_mib(self, obses1, obses2, actions, t):
+    def update_mib(self, obses1, obses2, actions, logger, t):
         seq_len, batch_size, ch, h, w  = obses1.size()
         s1_prior, s1 = self.DRIBO.encode(obses1, actions)
         s2_prior, s2 = self.DRIBO.encode(obses2, actions, ema=True)
@@ -277,13 +294,19 @@ class DRIBOSacAgent(object):
         loss += beta * kl_balancing
         loss += beta * skl
 
-        self.encoder_optimizer.zero_grad()
+        # self.encoder_optimizer.zero_grad()
         self.DRIBO_optimizer.zero_grad()
+
+        if t % self.log_interval == 0:
+            logger.log('train/DRIBO_loss', loss, t)
+            logger.log('train/beta', beta, t)
+            logger.log('train/skl', skl, t)
+
         loss.backward()
-        self.encoder_optimizer.step()
+        # self.encoder_optimizer.step()
         self.DRIBO_optimizer.step()
 
-    def save_DRIBO(self, model_dir, step):
+    def save_DRIBO(self, model_dir, t):
         params = dict(DRIBO=self.DRIBO, encoder=self.encoder, actor=self.actor)
         torch.save(
             params, '%s/dribo.pt' % (model_dir)

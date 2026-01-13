@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 
 from utils.video_recorder import VideoRecorder
+from utils.logger import Logger
 from agent.ReplayBuffer import ReplayBuffer
 from agent.DRIBOSacAgent import DRIBOSacAgent
 
@@ -27,8 +28,8 @@ def setup_cuda_optimization():
     """Configure CUDA/cuDNN for optimal DRIBO training performance"""
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.conv.fp32_precision = 'tf32'
+        torch.backends.cuda.matmul.fp32_precision = 'tf32'
         print("CUDA Optimizations Enabled")
     else:
         print("CUDA not available, running on CPU")
@@ -111,8 +112,9 @@ def main():
     episode_len = total_frames // frame_skip
     num_train_steps = 220000
     eval_freq = 5000
-    num_eval_episodes = 1
-    init_step = 1000
+    num_eval_episodes = 3
+    init_step = 50
+    log_interval = 100
 
 
     base_dir = "/content/drive/MyDrive/DRIBO_logs"
@@ -153,8 +155,8 @@ def main():
     # make directory
     env_name = domain_name + '-' + task_name
     
-    # work_dir =  "./log" + '/' + env_name
-    work_dir = os.path.join(base_dir, env_name)
+    work_dir =  "./log" + '/' + env_name
+    # work_dir = os.path.join(base_dir, env_name)
     
     os.makedirs(work_dir, exist_ok=True)
     video_dir = os.path.join(work_dir, 'video')
@@ -191,6 +193,7 @@ def main():
         device= device
     )
 
+    logger = Logger(work_dir)
     episode, episode_reward, episode_step, terminated =0, 0, 0, True
     max_mean_ep_reward = 0
 
@@ -203,7 +206,10 @@ def main():
     profile_end = profile_start + 10  # Profile 10 steps
 
     for t in pbar:
+        
         if t> init_step and t %  eval_freq == 0:
+            logger.log('eval/episode', episode, t)
+
             all_ep_rewards = []
             for i in range(num_eval_episodes):
                 obs_eval,_ = eval_env.reset()
@@ -222,19 +228,19 @@ def main():
                     episode_reward_eval += reward_eval
 
                 video.save('%d.mp4' % t)
+                logger.log('eval/' + 'episode_reward', episode_reward_eval, t)
                 all_ep_rewards.append(episode_reward_eval)
 
             mean_ep_reward = np.mean(all_ep_rewards)
             best_ep_reward = np.max(all_ep_rewards)
-            # mean_ep_reward = evaluate(eval_env, agent, video, args.num_eval_episodes, t)
+            logger.log('eval/' + 'mean_episode_reward', mean_ep_reward, t)
+            logger.log('eval/' + 'best_episode_reward', best_ep_reward, t)
+            logger.dump(t)
+
             if mean_ep_reward > max_mean_ep_reward:
                 max_mean_ep_reward = mean_ep_reward
                 agent.save_DRIBO(model_dir, t)
                 replay_buffer.save(buffer_dir)
-
-            # model_path = os.path.join(model_dir, 'dribo.pt')
-            # if os.path.exists(model_path):
-            #     files.download(model_path)
 
         # if t == profile_start:
         #     print(f"\n🔍 Starting profiler at step {t}")
@@ -246,14 +252,21 @@ def main():
         #     profiler.__enter__()
 
         if terminated:
+            if t > init_step and t % log_interval == 0:
+                logger.dump(t)
+            if t % log_interval == 0:
+                logger.log('train/episode_reward', episode_reward, t)
+
             obs,_ = env.reset()
-            print("Episode ended with reward ",episode_reward, " after ", episode_step, " Going to episode: ",episode )
+            # print("Episode ended with reward ",episode_reward, " after ", episode_step, " Going to episode: ",episode )
             prev_state = None
             prev_action = None
             terminated = False
             episode_reward = 0
             episode_step = 0
             episode += 1
+            if t % log_interval == 0:
+                logger.log('train/episode', episode, t)
 
         # Random exploration phase
         if t < init_step:
@@ -266,7 +279,7 @@ def main():
 
         # Training updates
         if t >= init_step:
-            agent.update(replay_buffer, t)
+            agent.update(replay_buffer, logger, t)
 
         next_obs, reward, terminated, truncated, info = env.step(action)
 

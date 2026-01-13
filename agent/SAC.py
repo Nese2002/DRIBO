@@ -53,6 +53,7 @@ class Actor(nn.Module):
             nn.Linear(hidden_dim, 2 * action_shape[0])
         )
 
+        self.outputs = dict()
         self.apply(weight_init)
     
     def forward(
@@ -63,7 +64,10 @@ class Actor(nn.Module):
         # constrain log_std inside [log_std_min, log_std_max]
         log_std = torch.tanh(log_std) 
         log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1)
-        
+
+        self.outputs['mu'] = mu
+        self.outputs['std'] = log_std.exp()        
+
         # Can compute both deterministic (mu) and stochastic (pi) actions
         if compute_pi:
             std = log_std.exp()
@@ -81,6 +85,17 @@ class Actor(nn.Module):
         mu, pi, log_pi = squash(mu, pi, log_pi) #Applies squashing for bounded action spaces
 
         return mu, pi, log_pi, log_std
+    
+    def log(self, logger, t, log_interval):
+        if t % log_interval != 0:
+            return
+
+        for k, v in self.outputs.items():
+            logger.log_histogram('train_actor/%s_hist' % k, v, t)
+
+        logger.log_param('train_actor/fc1', self.fc[0], t)
+        logger.log_param('train_actor/fc2', self.fc[2], t)
+        logger.log_param('train_actor/fc3', self.fc[4], t)
     
 class QFunction(nn.Module):
     def __init__(self, feature_dim, action_dim, hidden_dim):
@@ -110,10 +125,25 @@ class Critic(nn.Module):
             feature_dim, action_shape[0], hidden_dim
         )
 
+        self.outputs = dict()
         self.apply(weight_init)
 
     def forward(self, obs, action):
         q1 = self.Q1(obs, action)
         q2 = self.Q2(obs, action)
 
+        self.outputs['q1'] = q1
+        self.outputs['q2'] = q2
+
         return q1, q2
+    
+    def log(self, logger, t, log_interval):
+        if t % log_interval != 0:
+            return
+
+        for k, v in self.outputs.items():
+            logger.log_histogram('train_critic/%s_hist' % k, v, t)
+
+        for i in range(3):
+            logger.log_param('train_critic/q1_fc%d' % i, self.Q1.fc[i * 2], t)
+            logger.log_param('train_critic/q2_fc%d' % i, self.Q2.fc[i * 2], t)
