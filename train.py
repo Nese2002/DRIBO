@@ -26,26 +26,12 @@ def center_crop_image(image, output_size):
 def setup_cuda_optimization():
     """Configure CUDA/cuDNN for optimal DRIBO training performance"""
     if torch.cuda.is_available():
-        # Enable cuDNN benchmark mode for faster convolutions
-        # This finds the fastest algorithm for your specific input sizes
         torch.backends.cudnn.benchmark = True
-        
-        # Allow TensorFloat-32 on Ampere GPUs (RTX 30/40 series)
-        # Provides speedup with minimal accuracy impact
-        # Safe to enable even on older GPUs (will be ignored)
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        
-        print("="*60)
-        print("🚀 CUDA Optimizations Enabled")
-        print("="*60)
-        print(f"  Device: {torch.cuda.get_device_name(0)}")
-        print(f"  cuDNN benchmark: {torch.backends.cudnn.benchmark}")
-        print(f"  cuDNN version: {torch.backends.cudnn.version()}")
-        print(f"  TF32 enabled: {torch.backends.cuda.matmul.allow_tf32}")
-        print("="*60 + "\n")
+        print("CUDA Optimizations Enabled")
     else:
-        print("⚠️  CUDA not available, running on CPU")
+        print("CUDA not available, running on CPU")
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -68,7 +54,7 @@ class eval_mode(object):
     def __exit__(self, *args):
         for model, state in zip(self.models, self.prev_states):
             model.train(state)
-        return False  
+        return False
 
 
 
@@ -84,7 +70,7 @@ def main():
 #     seed=42,
 #     render_mode="rgb_array",   # 🔑 REQUIRED
 # )
-    
+
 #     obs, info = env.reset(seed=42)
 
 #     for step in range(300):
@@ -102,16 +88,16 @@ def main():
 
 #         if terminated or truncated:
 #             obs, info = env.reset()
-    
+
 #     video_recorder.save('episode_001.mp4')
 #     env.close()
 #     cv2.destroyAllWindows()
-   
+
     args = parse_args()
     domain_name = args.domain_name
     task_name = args.task_name
     render = args.render
-    frame_skip=1
+    frame_skip=4
     frame_stack=1
     img_size = 100
     augmented_img_size = 84
@@ -130,12 +116,12 @@ def main():
 
 
     base_dir = "/content/drive/MyDrive/DRIBO_logs"
-    print(f"✅ Saving to Google Drive: {base_dir}") 
+    # print(f"✅ Saving to Google Drive: {base_dir}")
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     setup_cuda_optimization()
-    
-    # Create environment 
+
+    # Create environment
     env = make(
         domain_name=domain_name,
         task_name=task_name,
@@ -146,8 +132,8 @@ def main():
         seed= 42,
         width= img_size,
         height= img_size,
-        render_mode=render, 
-        extra='train' 
+        render_mode=None,
+        extra='train'
     )
 
     eval_env = make(
@@ -160,21 +146,24 @@ def main():
         seed= 42,
         width= 640,
         height= 480,
-        render_mode="rgb_array",   
+        render_mode="rgb_array",
         extra='eval',
     )
 
     # make directory
     env_name = domain_name + '-' + task_name
-    work_dir = os.path.join(base_dir, env_name) #"./log" + '/' + env_name
-    os.makedirs(work_dir, exist_ok=True)  
+    
+    work_dir =  "./log" + '/' + env_name
+    # work_dir = os.path.join(base_dir, env_name)
+    
+    os.makedirs(work_dir, exist_ok=True)
     video_dir = os.path.join(work_dir, 'video')
     os.makedirs(video_dir, exist_ok=True)
     model_dir = os.path.join(work_dir, 'model')
     os.makedirs(model_dir, exist_ok=True)
     buffer_dir = os.path.join(work_dir, 'buffer')
     os.makedirs(buffer_dir, exist_ok=True)
-    
+
     if(save_video):
         video = VideoRecorder(dir_name=video_dir, height=480, width=640)
 
@@ -182,13 +171,14 @@ def main():
     action_shape = env.action_space.shape
     obs_shape = (3*frame_stack, img_size, img_size)
     augmented_obs_shape = (3*frame_stack, augmented_img_size, augmented_img_size)
+    print(action_shape)
 
     # Replay buffer
     replay_buffer = ReplayBuffer(
         obs_shape,
         action_shape,
         capacity = replay_buffer_capacity,
-        batch_size = batch_size, 
+        batch_size = batch_size,
         episode_len = episode_len,
         device= device,
         image_size=augmented_img_size
@@ -201,13 +191,13 @@ def main():
         device= device
     )
 
-    episode, episode_reward, terminated = 0, 0, True
+    episode, episode_reward, episode_step, terminated =0, 0, 0, True
     max_mean_ep_reward = 0
 
     pbar = tqdm(range(num_train_steps), desc="Training")
 
     from torch.profiler import profile, ProfilerActivity
-    
+
     profiler = None
     profile_start = init_step + 100  # Start profiling after init_step
     profile_end = profile_start + 10  # Profile 10 steps
@@ -233,7 +223,7 @@ def main():
 
                 video.save('%d.mp4' % t)
                 all_ep_rewards.append(episode_reward_eval)
-            
+
             mean_ep_reward = np.mean(all_ep_rewards)
             best_ep_reward = np.max(all_ep_rewards)
             # mean_ep_reward = evaluate(eval_env, agent, video, args.num_eval_episodes, t)
@@ -257,6 +247,7 @@ def main():
 
         if terminated:
             obs,_ = env.reset()
+            print("Episode ended with reward ",episode_reward, " after ", episode_step, " Going to episode: ",episode )
             prev_state = None
             prev_action = None
             terminated = False
@@ -279,10 +270,11 @@ def main():
 
         next_obs, reward, terminated, truncated, info = env.step(action)
 
+
         done_bool = 0 if episode_step + 1 == env._max_episode_steps else float(terminated)
         episode_reward += reward
         replay_buffer.add(obs, action, reward, next_obs, done_bool)
-
+        
         obs = next_obs
         episode_step += 1
 
@@ -293,21 +285,21 @@ def main():
         #     print("PROFILING RESULTS")
         #     print("="*80)
         #     print(profiler.key_averages().table(
-        #         sort_by="cuda_time_total", 
+        #         sort_by="cuda_time_total",
         #         row_limit=20
         #     ))
-            
+
         #     # Save detailed trace for Chrome
         #     trace_path = os.path.join(work_dir, 'profile_trace.json')
         #     profiler.export_chrome_trace(trace_path)
         #     print(f"\n💾 Detailed trace saved to: {trace_path}")
         #     print("   View in Chrome at: chrome://tracing")
         #     print("="*80 + "\n")
-            
+
         #     profiler = None  # Clear profiler
-    
+
 
 if __name__ == '__main__':
     main()
 
-    
+
