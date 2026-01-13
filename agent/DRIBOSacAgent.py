@@ -98,7 +98,7 @@ class DRIBOSacAgent(object):
         self.image_size = obses_shape[-1]
         self.batch_size = mib_batch_size
         self.seq_len = mib_seq_len
-        # self.grad_clip = grad_clip
+        self.grad_clip = grad_clip
         self.kl_balancing = kl_balancing
 
         #rssm
@@ -165,6 +165,9 @@ class DRIBOSacAgent(object):
             obs = obs.unsqueeze(0)
             prev_state = self.encoder(obs, prev_action, prev_state)
             latent_state = torch.cat([prev_state.stoch, prev_state.det], dim=-1)
+
+            latent_state = self.encoder.ln(latent_state)
+
             mu, _, _, _ = self.actor(latent_state, compute_pi=False, compute_log_pi=False)
             return mu.cpu().data.numpy().flatten(), mu, prev_state
     
@@ -177,6 +180,9 @@ class DRIBOSacAgent(object):
             obs = obs.unsqueeze(0)
             current_state = self.encoder(obs, prev_action, prev_state)
             latent_state = torch.cat([current_state.stoch, current_state.det], dim=-1)
+
+            latent_state = self.encoder.ln(latent_state)
+
             mu, pi, _, _ = self.actor(latent_state, compute_log_pi=False)
             action = pi.squeeze(0).cpu().numpy()
             
@@ -235,6 +241,9 @@ class DRIBOSacAgent(object):
 
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), self.grad_clip)
+
         self.critic_optimizer.step()
 
         self.critic.log(logger, t, log_interval=self.log_interval)
@@ -281,6 +290,9 @@ class DRIBOSacAgent(object):
         latent_states1 =torch.cat([s1.stoch, s1.det], dim=-1).reshape(seq_len * batch_size, -1)
         latent_states2 = torch.cat([s2.stoch, s2.det], dim=-1).reshape(seq_len * batch_size, -1)
 
+        latent_states1 = self.encoder.ln(latent_states1)
+        latent_states2 = self.encoder.ln(latent_states2)
+
         logits = self.DRIBO.compute_logits(latent_states1, latent_states2)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
         loss = self.cross_entropy_loss(logits, labels)
@@ -296,15 +308,18 @@ class DRIBOSacAgent(object):
 
         # self.encoder_optimizer.zero_grad()
         self.DRIBO_optimizer.zero_grad()
+        loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), self.grad_clip)
+        
+        # self.encoder_optimizer.step()
+        self.DRIBO_optimizer.step()
 
         if t % self.log_interval == 0:
             logger.log('train/DRIBO_loss', loss, t)
             logger.log('train/beta', beta, t)
             logger.log('train/skl', skl, t)
 
-        loss.backward()
-        # self.encoder_optimizer.step()
-        self.DRIBO_optimizer.step()
 
     def save_DRIBO(self, model_dir, t):
         params = dict(DRIBO=self.DRIBO, encoder=self.encoder, actor=self.actor)

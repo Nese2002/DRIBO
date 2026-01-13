@@ -250,7 +250,7 @@ class RSSMEncoder(nn.Module):
         self.rollout = RSSMRollout(self.representation, self.transition)
 
         # layer normalization
-        # self.ln = nn.LayerNorm(self.obs_encoder_feature_dim)
+        self.ln = nn.LayerNorm(self.obs_encoder_feature_dim)
 
 
     def forward(self, obs, prev_action, prev_state):
