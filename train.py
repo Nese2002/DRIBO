@@ -105,13 +105,13 @@ def main():
     replay_buffer_capacity = 100000
     resource_files = 'dataset/train/*.avi'
     eval_resource_files = 'dataset/test/*.avi'
-    total_frames = 5000
+    total_frames = 2500
     save_video = True
 
     batch_size = 8
     episode_len = total_frames // frame_skip
     num_train_steps = 220000
-    eval_freq = 50
+    eval_freq = 5000
     num_eval_episodes = 3
     init_step = 1000
     log_interval = 100
