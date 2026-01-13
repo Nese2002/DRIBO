@@ -153,8 +153,8 @@ def main():
     # make directory
     env_name = domain_name + '-' + task_name
     
-    work_dir =  "./log" + '/' + env_name
-    # work_dir = os.path.join(base_dir, env_name)
+    # work_dir =  "./log" + '/' + env_name
+    work_dir = os.path.join(base_dir, env_name)
     
     os.makedirs(work_dir, exist_ok=True)
     video_dir = os.path.join(work_dir, 'video')
