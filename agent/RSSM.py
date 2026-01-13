@@ -226,7 +226,7 @@ class RSSMEncoder(nn.Module):
         actions_size = np.prod(actions_shape)
         self.stoch_size = stochastic_size
         self.det_size = deterministic_size
-        self.obs_encoder_feature_dim = obs_encoder_feature_dim #stochastic_size + deterministic_size # Check
+        self.obs_encoder_feature_dim = stochastic_size + deterministic_size # Check obs_encoder_feature_dim 
         self.num_layers = num_layers
         self.dtype = dtype
         self.output_logits = output_logits

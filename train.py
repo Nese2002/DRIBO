@@ -105,7 +105,7 @@ def main():
     replay_buffer_capacity = 100000
     resource_files = 'dataset/train/*.avi'
     eval_resource_files = 'dataset/test/BasketballDunk/*.avi'
-    total_frames = 1000
+    total_frames = 10000
     save_video = True
 
     batch_size = 8
@@ -113,7 +113,7 @@ def main():
     num_train_steps = 220000
     eval_freq = 5000
     num_eval_episodes = 3
-    init_step = 50
+    init_step = 1000
     log_interval = 100
 
 
