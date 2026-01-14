@@ -110,17 +110,34 @@ class ReplayBuffer(Dataset):
         chunks = os.listdir(save_dir)
         chunks = sorted(chunks, key=lambda x: int(x.split('_')[0]))
         for chunk in chunks:
-            start, end = [int(x) for x in chunk.split('.')[0].split('_')]
-            episode = os.path.join(save_dir, chunk)
-            payload = torch.load(episode, weights_only=False)
-            assert self.idx == start
-            self.obses[start:end] = payload[0]
-            self.next_obses[start:end] = payload[1]
-            self.actions[start:end] = payload[2]
-            self.rewards[start:end] = payload[3]
-            self.not_dones[start:end] = payload[4]
-            self.idx = end
-
+            try:
+                start, end = [int(x) for x in chunk.split('.')[0].split('_')]
+                episode = os.path.join(save_dir, chunk)
+                
+                # Check if file is empty or corrupted
+                if os.path.getsize(episode) == 0:
+                    print(f"Warning: Skipping empty file {chunk}")
+                    continue
+                
+                payload = torch.load(episode, weights_only=False)
+                assert self.idx == start
+                self.obses[start:end] = payload[0]
+                self.next_obses[start:end] = payload[1]
+                self.actions[start:end] = payload[2]
+                self.rewards[start:end] = payload[3]
+                self.not_dones[start:end] = payload[4]
+                self.idx = end
+                
+            except EOFError:
+                print(f"Warning: Corrupted file {chunk}, skipping...")
+                continue
+            except Exception as e:
+                print(f"Warning: Error loading {chunk}: {e}, skipping...")
+                continue
+        
+        # Set last_save to idx after loading all chunks
+        self.last_save = self.idx
+        print(f"Loaded replay buffer: idx={self.idx}, last_save={self.last_save}")
     def __getitem__(self, idx):
         idx = np.random.randint(
             0, self.capacity if self.full else self.idx, size=1
