@@ -58,6 +58,37 @@ class eval_mode(object):
         return False
 
 
+def load_checkpoint(agent, replay_buffer, checkpoint_dir):
+    """Load saved model and replay buffer"""
+    
+    # Load model
+    model_path = os.path.join(checkpoint_dir, 'model', 'dribo.pt')
+    if os.path.exists(model_path):
+        print(f"Loading model from {model_path}")
+        checkpoint = torch.load(model_path, map_location=agent.device)
+        
+        # Load agent components
+        agent.DRIBO.load_state_dict(checkpoint['DRIBO'].state_dict())
+        agent.encoder.load_state_dict(checkpoint['encoder'].state_dict())
+        agent.actor.load_state_dict(checkpoint['actor'].state_dict())
+        
+        # Update target networks
+        agent.encoder_target.load_state_dict(agent.encoder.state_dict())
+        
+        print("✓ Model loaded successfully")
+    else:
+        print(f"Warning: Model not found at {model_path}")
+    
+    # Load replay buffer
+    buffer_dir = os.path.join(checkpoint_dir, 'buffer')
+    if os.path.exists(buffer_dir):
+        print(f"Loading replay buffer from {buffer_dir}")
+        replay_buffer.load(buffer_dir)
+        print(f"✓ Replay buffer loaded successfully ({replay_buffer.idx} samples)")
+    else:
+        print(f"Warning: Buffer not found at {buffer_dir}")
+    
+    return agent, replay_buffer
 
 def main():
 #     video_recorder = VideoRecorder(dir_name='./videos', height=480, width=640)
@@ -116,6 +147,9 @@ def main():
     init_step = 1000
     log_interval = 100
 
+    #checkpoint
+    start_step=45000
+    resume = True
 
     base_dir = "/content/drive/MyDrive/DRIBO_logs"
     # print(f"✅ Saving to Google Drive: {base_dir}")
@@ -193,11 +227,22 @@ def main():
         device= device
     )
 
+    if resume:
+        print(f"\n{'='*60}")
+        print(f"RESUMING TRAINING FROM: {work_dir}")
+        print(f"{'='*60}\n")
+        
+        agent, replay_buffer = load_checkpoint(agent, replay_buffer, work_dir)
+        
+        print(f"\nResuming from step: {start_step}")
+        print(f"Replay buffer size: {replay_buffer.idx}")
+        print(f"{'='*60}\n")
+
     logger = Logger(work_dir)
     episode, episode_reward, episode_step, terminated =0, 0, 0, True
     max_mean_ep_reward = 0
 
-    pbar = tqdm(range(num_train_steps), desc="Training")
+    pbar = tqdm(range(start_step, num_train_steps), desc="Training")
 
     from torch.profiler import profile, ProfilerActivity
 
@@ -314,5 +359,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
