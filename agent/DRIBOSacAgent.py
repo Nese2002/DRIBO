@@ -128,7 +128,7 @@ class DRIBOSacAgent(object):
         self.DRIBO = DRIBO(obses_shape, feature_dim,self.encoder, self.encoder_target, self.device).to(device)
 
         #optimizers
-        # self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=encoder_lr, fused=True)
+        self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=encoder_lr, fused=True)
 
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr, fused=True)
 
@@ -306,13 +306,13 @@ class DRIBOSacAgent(object):
         loss += beta * kl_balancing
         loss += beta * skl
 
-        # self.encoder_optimizer.zero_grad()
+        self.encoder_optimizer.zero_grad()
         self.DRIBO_optimizer.zero_grad()
         loss.backward()
 
         # torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), self.grad_clip)
         
-        # self.encoder_optimizer.step()
+        self.encoder_optimizer.step()
         self.DRIBO_optimizer.step()
 
         if t % self.log_interval == 0:

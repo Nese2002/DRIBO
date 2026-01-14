@@ -23,7 +23,7 @@ def flatten_states(rssm_states, batch_shape):
 
 class ObservationEncoder(nn.Module):
     def __init__(
-        self, depth=32, stride=1, shape=(3, 84, 84), output_logits=False,
+        self, depth=32, stride=1, shape=(3, 84, 84),
         num_layers=4, obs_encoder_feature_dim=1024, activation=nn.ReLU
     ):
         super().__init__()
@@ -32,7 +32,6 @@ class ObservationEncoder(nn.Module):
         self.depth = depth
         self.num_layers = num_layers
         self.obs_encoder_feature_dim = obs_encoder_feature_dim
-        self.output_logits = output_logits
 
         self.convs = nn.Sequential(
             nn.Conv2d(shape[0],depth,3,stride=2),
@@ -63,8 +62,7 @@ class ObservationEncoder(nn.Module):
         embed = torch.reshape(embed, (np.prod(batch_shape), -1))
         embed = self.fc(embed)
         embed = self.ln(embed)
-        if not self.output_logits:
-            embed = torch.tanh(embed)
+        # embed = torch.tanh(embed)
         embed = torch.reshape(embed, (*batch_shape, -1))
         return embed
 
@@ -218,7 +216,7 @@ class RSSMEncoder(nn.Module):
     def __init__(
     self, obs_shape, actions_shape, obs_encoder_feature_dim=1024,
     stochastic_size=30, deterministic_size=200, num_layers=4, num_filters=32,
-    hidden_size=1024, dtype=torch.float, output_logits=False, device=None
+    hidden_size=1024, dtype=torch.float, device=None
     ):
         super().__init__()
         self.obs_shape = obs_shape
@@ -226,16 +224,15 @@ class RSSMEncoder(nn.Module):
         actions_size = np.prod(actions_shape)
         self.stoch_size = stochastic_size
         self.det_size = deterministic_size
-        self.obs_encoder_feature_dim = stochastic_size + deterministic_size # Check obs_encoder_feature_dim 
+        self.latent_size = stochastic_size + deterministic_size
         self.num_layers = num_layers
         self.dtype = dtype
-        self.output_logits = output_logits
         self.device = device
 
         # observation encoder
         self.observation_encoder = ObservationEncoder(
             shape=obs_shape, num_layers=num_layers, obs_encoder_feature_dim=obs_encoder_feature_dim,
-            depth=num_filters, output_logits=self.output_logits
+            depth=num_filters
         )
         # pixel_embed_size = self.observation_encoder.obs_encoder_feature_dim
 
@@ -250,7 +247,7 @@ class RSSMEncoder(nn.Module):
         self.rollout = RSSMRollout(self.representation, self.transition)
 
         # layer normalization
-        self.ln = nn.LayerNorm(self.obs_encoder_feature_dim)
+        self.ln = nn.LayerNorm(self.latent_size)
 
 
     def forward(self, obs, prev_action, prev_state):
