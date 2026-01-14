@@ -65,7 +65,7 @@ def load_checkpoint(agent, replay_buffer, checkpoint_dir):
     model_path = os.path.join(checkpoint_dir, 'model', 'dribo.pt')
     if os.path.exists(model_path):
         print(f"Loading model from {model_path}")
-        checkpoint = torch.load(model_path, map_location=agent.device)
+        checkpoint = torch.load(model_path, map_location=agent.device, weights_only=False)
         
         # Load agent components
         agent.DRIBO.load_state_dict(checkpoint['DRIBO'].state_dict())
