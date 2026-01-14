@@ -80,8 +80,8 @@ class DRIBOSacAgent(object):
         mib_update_freq=1,
         mib_batch_size=8,
         mib_seq_len=32,
-        beta_start_value=1e-3,
-        beta_end_value=1e-1,
+        beta_start_value=1e-4,
+        beta_end_value=1e-3,
         grad_clip=500,#
         kl_balancing=True
     ):
