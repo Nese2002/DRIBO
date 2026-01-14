@@ -110,7 +110,7 @@ def main():
 
     batch_size = 8
     episode_len = total_frames // frame_skip
-    num_train_steps = 220000
+    num_train_steps = 300000
     eval_freq = 5000
     num_eval_episodes = 3
     init_step = 1000
