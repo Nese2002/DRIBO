@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as td
+import os
 
 from .RSSM import RSSMEncoder
 from .SAC import Actor, Critic
@@ -320,9 +321,62 @@ class DRIBOSacAgent(object):
             logger.log('train/beta', beta, t)
             logger.log('train/skl', skl, t)
 
+    
+    def load(self, model_dir, ):
+        """Load all network parameters"""
+        checkpoints = [f for f in os.listdir(model_dir) if f.startswith('checkpoint_') and f.endswith('.pt')]
+        if not checkpoints:
+            print("No checkpoint found!")
+            return 0
+        steps = [int(f.split('_')[1].split('.')[0]) for f in checkpoints]
+        step = max(steps)
+        
+        checkpoint_path = os.path.join(model_dir, f'checkpoint_{step}.pt')
+        print(f"Loading checkpoint from: {checkpoint_path}")
+        
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        
+        # Load networks
+        self.encoder.load_state_dict(checkpoint['encoder'])
+        self.encoder_target.load_state_dict(checkpoint['encoder_target'])
+        self.actor.load_state_dict(checkpoint['actor'])
+        self.critic.load_state_dict(checkpoint['critic'])
+        self.critic_target.load_state_dict(checkpoint['critic_target'])
+        self.DRIBO.load_state_dict(checkpoint['DRIBO'])
+        
+        # Load optimizers
+        self.encoder_optimizer.load_state_dict(checkpoint['encoder_optimizer'])
+        self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer'])
+        self.critic_optimizer.load_state_dict(checkpoint['critic_optimizer'])
+        self.log_alpha_optimizer.load_state_dict(checkpoint['log_alpha_optimizer'])
+        self.DRIBO_optimizer.load_state_dict(checkpoint['DRIBO_optimizer'])
+        
+        # Load other parameters
+        self.log_alpha = checkpoint['log_alpha'].to(self.device)
+        self.log_alpha.requires_grad = True
+        
+        print(f"Loaded checkpoint from step {step}")
+        return checkpoint['step']
 
-    def save_DRIBO(self, model_dir, t):
-        params = dict(DRIBO=self.DRIBO, encoder=self.encoder, actor=self.actor)
-        torch.save(
-            params, '%s/dribo.pt' % (model_dir)
-        )
+    def save(self, model_dir, t):
+        """Save all network parameters"""
+        torch.save({
+            # Networks
+            'encoder': self.encoder.state_dict(),
+            'encoder_target': self.encoder_target.state_dict(),
+            'actor': self.actor.state_dict(),
+            'critic': self.critic.state_dict(),
+            'critic_target': self.critic_target.state_dict(),
+            'DRIBO': self.DRIBO.state_dict(),
+            
+            # Optimizers
+            'encoder_optimizer': self.encoder_optimizer.state_dict(),
+            'actor_optimizer': self.actor_optimizer.state_dict(),
+            'critic_optimizer': self.critic_optimizer.state_dict(),
+            'log_alpha_optimizer': self.log_alpha_optimizer.state_dict(),
+            'DRIBO_optimizer': self.DRIBO_optimizer.state_dict(),
+            
+            # Other parameters
+            'log_alpha': self.log_alpha,
+            'step': t,
+        }, os.path.join(model_dir, f'checkpoint_{t}.pt'))

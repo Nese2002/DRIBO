@@ -38,7 +38,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--domain_name', default='cheetah')
     parser.add_argument('--task_name', default='run')
-    parser.add_argument('--render', default=None) # "rgb_array" to render
+    parser.add_argument('--resume', default=None, action='store_true', help='Resume from latest checkpoint')
     args = parser.parse_args()
     return args
 
@@ -58,54 +58,19 @@ class eval_mode(object):
         return False
 
 
-
 def main():
-#     video_recorder = VideoRecorder(dir_name='./videos', height=480, width=640)
-#     video_recorder.init(enabled=True)
-
-#     env = make(
-#     domain_name='cheetah',
-#     task_name='run',
-#     resource_files='dataset/train/*.avi',
-#     total_frames=1000,
-#     seed=42,
-#     render_mode="rgb_array",   # 🔑 REQUIRED
-# )
-
-#     obs, info = env.reset(seed=42)
-
-#     for step in range(300):
-#         action = env.action_space.sample()
-
-#         if step % 50 == 0:
-#             print(f"Step {step}, Action: {action}, Obs mean: {obs.mean()}")
-#         obs, reward, terminated, truncated, info = env.step(action)
-#         video_recorder.record(env)
-#         # frame = env.render()  # (H, W, 3), uint8
-#         # cv2.imshow("DMC + Video Background", frame[:, :, ::-1])  # RGB → BGR
-
-#         # if cv2.waitKey(1) & 0xFF == ord('q'):
-#         #     break
-
-#         if terminated or truncated:
-#             obs, info = env.reset()
-
-#     video_recorder.save('episode_001.mp4')
-#     env.close()
-#     cv2.destroyAllWindows()
-
     args = parse_args()
     domain_name = args.domain_name
     task_name = args.task_name
-    render = args.render
+    resume = args.resume
     frame_skip=4
     frame_stack=1
     img_size = 100
     augmented_img_size = 84
-    replay_buffer_capacity = 100000
+    replay_buffer_capacity = 50000
     resource_files = 'dataset/train/*.avi'
     eval_resource_files = 'dataset/test/*.avi'
-    total_frames = 2500
+    total_frames = 1000
     save_video = True
 
     batch_size = 8
@@ -118,7 +83,6 @@ def main():
 
 
     base_dir = "/content/drive/MyDrive/DRIBO_logs"
-    # print(f"✅ Saving to Google Drive: {base_dir}")
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     setup_cuda_optimization()
@@ -193,17 +157,25 @@ def main():
         device= device
     )
 
+    # Load model
+    start_step = 0
+    if resume is not None:
+        if os.path.exists(model_dir) and os.listdir(model_dir):
+            start_step = agent.load(model_dir)
+            
+            if os.path.exists(os.path.join(buffer_dir, 'replay_buffer.npz')):
+                replay_buffer.load(buffer_dir)
+                print(f"Loaded replay buffer")
+            else:
+                print(f"No replay buffer found, starting with empty buffer")
+        else:
+            print("No checkpoint found, starting from scratch")
+
     logger = Logger(work_dir)
     episode, episode_reward, episode_step, terminated =0, 0, 0, True
     max_mean_ep_reward = 0
 
-    pbar = tqdm(range(num_train_steps), desc="Training")
-
-    from torch.profiler import profile, ProfilerActivity
-
-    profiler = None
-    profile_start = init_step + 100  # Start profiling after init_step
-    profile_end = profile_start + 10  # Profile 10 steps
+    pbar = tqdm(range(start_step, num_train_steps), desc="Training", initial=start_step, total=num_train_steps)
 
     for t in pbar:
         
@@ -239,17 +211,8 @@ def main():
 
             if mean_ep_reward > max_mean_ep_reward:
                 max_mean_ep_reward = mean_ep_reward
-                agent.save_DRIBO(model_dir, t)
+                agent.save(model_dir, t)
                 replay_buffer.save(buffer_dir)
-
-        # if t == profile_start:
-        #     print(f"\n🔍 Starting profiler at step {t}")
-        #     profiler = profile(
-        #         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        #         record_shapes=True,
-        #         with_stack=True
-        #     )
-        #     profiler.__enter__()
 
         if terminated:
             if t > init_step and t % log_interval == 0:
@@ -258,7 +221,6 @@ def main():
                 logger.log('train/episode_reward', episode_reward, t)
 
             obs,_ = env.reset()
-            # print("Episode ended with reward ",episode_reward, " after ", episode_step, " Going to episode: ",episode )
             prev_state = None
             prev_action = None
             terminated = False
@@ -291,26 +253,6 @@ def main():
         obs = next_obs
         episode_step += 1
 
-        # Stop profiler and print results
-        # if t == profile_end and profiler is not None:
-        #     profiler.__exit__(None, None, None)
-        #     print("\n" + "="*80)
-        #     print("PROFILING RESULTS")
-        #     print("="*80)
-        #     print(profiler.key_averages().table(
-        #         sort_by="cuda_time_total",
-        #         row_limit=20
-        #     ))
-
-        #     # Save detailed trace for Chrome
-        #     trace_path = os.path.join(work_dir, 'profile_trace.json')
-        #     profiler.export_chrome_trace(trace_path)
-        #     print(f"\n💾 Detailed trace saved to: {trace_path}")
-        #     print("   View in Chrome at: chrome://tracing")
-        #     print("="*80 + "\n")
-
-        #     profiler = None  # Clear profiler
-
-
+        
 if __name__ == '__main__':
     main()

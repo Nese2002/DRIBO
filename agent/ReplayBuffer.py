@@ -93,33 +93,45 @@ class ReplayBuffer(Dataset):
     
     
     def save(self, save_dir):
-        if self.idx == self.last_save:
-            return
-        episode = os.path.join(save_dir, '%d_%d.pt' % (self.last_save, self.idx))
-        payload = [
-            self.obses[self.last_save:self.idx],
-            self.next_obses[self.last_save:self.idx],
-            self.actions[self.last_save:self.idx],
-            self.rewards[self.last_save:self.idx],
-            self.not_dones[self.last_save:self.idx]
-        ]
-        self.last_save = self.idx
-        torch.save(payload, episode)
+        """Save complete replay buffer state"""
+        path = os.path.join(save_dir, 'replay_buffer.npz')
+        
+        size = self.capacity if self.full else self.idx
+        
+        np.savez_compressed(
+            path,
+            obses=self.obses[:size],
+            next_obses=self.next_obses[:size],
+            actions=self.actions[:size],
+            rewards=self.rewards[:size],
+            not_dones=self.not_dones[:size],
+            idx=self.idx,
+            full=self.full,
+            last_save=self.last_save
+        )
 
-    def load(self, save_dir):
-        chunks = os.listdir(save_dir)
-        chunks = sorted(chunks, key=lambda x: int(x.split('_')[0]))
-        for chunk in chunks:
-            start, end = [int(x) for x in chunk.split('.')[0].split('_')]
-            episode = os.path.join(save_dir, chunk)
-            payload = torch.load(episode)
-            assert self.idx == start
-            self.obses[start:end] = payload[0]
-            self.next_obses[start:end] = payload[1]
-            self.actions[start:end] = payload[2]
-            self.rewards[start:end] = payload[3]
-            self.not_dones[start:end] = payload[4]
-            self.idx = end
+    def load(self, load_dir):
+        """Load complete replay buffer state"""
+        path = os.path.join(load_dir, 'replay_buffer.npz')
+        
+        if not os.path.exists(path):
+            print(f"No replay buffer found at {path}")
+            return
+        
+        data = np.load(path)
+        
+        # Restore data
+        size = len(data['obses'])
+        self.obses[:size] = data['obses']
+        self.next_obses[:size] = data['next_obses']
+        self.actions[:size] = data['actions']
+        self.rewards[:size] = data['rewards']
+        self.not_dones[:size] = data['not_dones']
+        
+        # Restore metadata
+        self.idx = int(data['idx'])
+        self.full = bool(data['full'])
+        self.last_save = int(data['last_save'])
 
     def __getitem__(self, idx):
         idx = np.random.randint(
