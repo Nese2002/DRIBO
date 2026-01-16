@@ -76,13 +76,13 @@ class DRIBOSacAgent(object):
         encoder_lr=1e-5,
         encoder_tau=0.05,
         num_layers=4,
-        num_filters=16, #32
+        num_filters=32, #16
         #DRIBO
         mib_update_freq=1,
         mib_batch_size=8,
         mib_seq_len=32,
         beta_start_value=1e-4,
-        beta_end_value=1e-3,
+        beta_end_value=1e-1,
         grad_clip=500,#
         kl_balancing=True
     ):
@@ -358,7 +358,7 @@ class DRIBOSacAgent(object):
         print(f"Loaded checkpoint from step {step}")
         return checkpoint['step']
 
-    def save(self, model_dir, t):
+    def save(self, model_dir, t, episode):
         """Save all network parameters"""
         torch.save({
             # Networks
@@ -379,4 +379,5 @@ class DRIBOSacAgent(object):
             # Other parameters
             'log_alpha': self.log_alpha,
             'step': t,
+            'episode': episode
         }, os.path.join(model_dir, f'checkpoint_{t}.pt'))

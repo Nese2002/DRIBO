@@ -38,10 +38,10 @@ class ObservationEncoder(nn.Module):
             nn.ReLU(),
             nn.Conv2d(depth,depth,3,stride=stride),
             nn.ReLU(),
-            # nn.Conv2d(depth,depth,3,stride=stride),
-            # nn.ReLU(),
-            # nn.Conv2d(depth,depth,3,stride=stride),
-            # nn.ReLU(),
+            nn.Conv2d(depth,depth,3,stride=stride),
+            nn.ReLU(),
+            nn.Conv2d(depth,depth,3,stride=stride),
+            nn.ReLU(),
         )
 
         with torch.no_grad():
@@ -65,6 +65,21 @@ class ObservationEncoder(nn.Module):
         # embed = torch.tanh(embed)
         embed = torch.reshape(embed, (*batch_shape, -1))
         return embed
+    
+    def spatial_attention(self, obs):
+        spatial_softmax = nn.Softmax(1)
+        img_shape = obs.shape[-3:]
+        gs = [None] * len(self.convs)
+        x = obs
+        for idx, layer in enumerate(self.convs):
+            x = layer(
+                x.reshape(-1, *img_shape) / 255.
+            ) if idx == 0 else layer(x)
+            gs[idx] = x
+        gs = [gs_.pow(2).mean(1) for gs_ in gs]
+        return [spatial_softmax(
+            gs_.view(*gs_.size()[:1], -1)
+        ).view_as(gs_) for gs_ in gs]
 
 
 class RSSMState:
