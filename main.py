@@ -112,7 +112,7 @@ def train(args):
     eval_resource_files = 'dataset/test/*.avi'
     batch_size = 8
     episode_len = config['total_frames'] // config['frame_skip']
-    num_train_steps = 50000
+    num_train_steps = 500000
     eval_freq = 5000
     num_eval_episodes = 3
     init_step = 1000
