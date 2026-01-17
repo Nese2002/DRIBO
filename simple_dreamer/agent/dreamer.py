@@ -171,7 +171,8 @@ class Dreamer:
         
         for ep in range(num_episodes):
             prev_state = None
-            prev_action = None
+            # Initialize prev_action as zero tensor on correct device
+            prev_action = torch.zeros(1, self.action_size, device=self.device)
             obs_raw, _ = env.reset()
             
             score = 0
@@ -424,15 +425,15 @@ class Dreamer:
 
     def _agent_update(self, imagined_trajectory):
         """Update actor and critic with return normalization"""
-        # Compute predicted rewards - FIXED: added () to call the method
+        # Compute predicted rewards
         predicted_rewards = self.reward_predictor(
             imagined_trajectory.stoch, imagined_trajectory.det
-        ).mean()
+        ).mean
         
-        # Compute values - FIXED: added () to call the method
+        # Compute values
         values = self.critic(
             imagined_trajectory.stoch, imagined_trajectory.det
-        ).mean()
+        ).mean
         
         continues = self.config['parameters']['dreamer']['discount'] * torch.ones_like(values)
 
@@ -494,7 +495,8 @@ class Dreamer:
 
         for ep in episode_pbar:
             prev_state = None
-            prev_action = None
+            # Initialize prev_action as zero tensor on correct device
+            prev_action = torch.zeros(1, self.action_size, device=self.device)
 
             obs_raw, _ = env.reset()
             
