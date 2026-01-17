@@ -101,8 +101,9 @@ def train(config, args):
     setup_cuda_optimization()
     
     # Create directories
+    base_dir = "/content/drive/MyDrive/dreamer_logs"
     env_name = config['environment']['domain_name'] + '-' + config['environment']['task_name']
-    work_dir = config.get('work_dir', os.path.join("./log", env_name))
+    work_dir = os.path.join(base_dir, env_name)
     
     os.makedirs(work_dir, exist_ok=True)
     video_dir = os.path.join(work_dir, 'video')
