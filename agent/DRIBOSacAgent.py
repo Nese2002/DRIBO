@@ -54,7 +54,7 @@ class DRIBOSacAgent(object):
         actions_shape,
         #general
         device,
-        hidden_dim=512,
+        hidden_dim=1024,
         log_interval=100, 
         #critic
         discount=0.99,
@@ -70,7 +70,7 @@ class DRIBOSacAgent(object):
         actor_log_std_max=2,
         actor_update_freq=2,
         #rssm
-        obs_encoder_feature_dim=512,
+        obs_encoder_feature_dim=1024,
         stochastic_size=30,
         deterministic_size=200,
         encoder_lr=1e-5,
@@ -197,7 +197,7 @@ class DRIBOSacAgent(object):
         if t % self.log_interval == 0:
             logger.log('train/batch_reward', rewards.mean(), t)        
 
-        flat_actions = actions[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
+        flat_actions = actions[:-1].reshape((self.seq_len-1) * self.batch_size,-1) #2(48,6)
         rewards = rewards[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
         not_done = not_done[:-1].reshape((self.seq_len-1) * self.batch_size,-1)
 
