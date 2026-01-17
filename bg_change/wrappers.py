@@ -57,6 +57,7 @@ class DMCWrapper(gym.Env):
         frame_stack=1,
         environment_kwargs=None,
         render_mode=None,
+        max_episode_steps=1000,
     ):
         assert 'random' in task_kwargs, \
             'please specify a seed, for deterministic behaviour'
@@ -68,6 +69,9 @@ class DMCWrapper(gym.Env):
         self._last_rendered_obs = None
         self._frame_stack = frame_stack
         self._frames = deque([], maxlen=frame_stack)
+
+        self._max_episode_steps = max_episode_steps
+        self._elapsed_steps = 0
 
         # create control suite environment
         self._env = suite.load(
@@ -181,33 +185,43 @@ class DMCWrapper(gym.Env):
         return (self._seed,)
 
     def step(self, action):
-        """
-        Gymnasium step() returns 5 values: obs, reward, terminated, truncated, info
-        - terminated: episode ended due to task completion/failure
-        - truncated: episode ended due to time limit
-        """
         assert self._norm_action_space.contains(action)
         action = self._convert_action(action)
         assert self._true_action_space.contains(action)
-        reward = 0
+
+        reward = 0.0
+        discount_prod = 1.0
         info = {'internal_state': self._env.physics.get_state().copy()}
+
+        time_step = None
+        micro_steps = 0
 
         for _ in range(self._frame_skip):
             time_step = self._env.step(action)
-            reward += time_step.reward or 0
-            done = time_step.last()
-            if done:
+            micro_steps += 1
+
+            reward += float(time_step.reward or 0.0)
+            if time_step.discount is not None:
+                discount_prod *= float(time_step.discount)
+
+            if time_step.last():
                 break
-        
+
         obs = self._get_noisy_obs(time_step)
         self._frames.append(obs)
-        info['discount'] = time_step.discount
-        
-        # In DMC, episodes end naturally (terminated=True, truncated=False)
-        # If you want to handle time limits separately, you'd need to track steps
-        terminated = done
-        truncated = False
-        
+
+        self._elapsed_steps += micro_steps  # counts *frames*, not macro-steps
+        info['discount'] = discount_prod
+
+        last = time_step.last()
+        disc = float(time_step.discount) if time_step.discount is not None else 1.0
+        terminated = bool(last and disc == 0.0)
+        truncated  = bool(last and disc != 0.0)
+
+        # Optional wrapper time limit (1000 frames default)
+        if self._elapsed_steps >= self._max_episode_steps and not terminated:
+            truncated = True
+
         return self._get_obs(), reward, terminated, truncated, info
 
     def reset(self, seed=None, options=None):
@@ -220,8 +234,12 @@ class DMCWrapper(gym.Env):
             
         time_step = self._env.reset()
         obs = self._get_noisy_obs(time_step)
+        
+        self._frames.clear()
         for _ in range(self._frame_stack):
             self._frames.append(obs)
+        
+        self._elapsed_steps = 0
         
         info = {}
         return self._get_obs(), info

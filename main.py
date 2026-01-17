@@ -79,8 +79,8 @@ def setup_environment(args):
     
     base_dir = "/content/drive/MyDrive/DRIBO_logs"
     env_name = args.domain_name + '-' + args.task_name
-    work_dir = os.path.join(base_dir, env_name)
-    # work_dir =  "./log" + '/' + env_name
+    # work_dir = os.path.join(base_dir, env_name)
+    work_dir =  "./log" + '/' + env_name
     
     os.makedirs(work_dir, exist_ok=True)
     
@@ -113,9 +113,9 @@ def train(args):
     batch_size = 8
     episode_len = config['total_frames'] // config['frame_skip']
     num_train_steps = 500000
-    eval_freq = 5000
-    num_eval_episodes = 3
-    init_step = 1000
+    eval_freq = 50
+    num_eval_episodes = 1
+    init_step = 100
     log_interval = 100
 
     # Create directories
@@ -196,7 +196,7 @@ def train(args):
             print("No checkpoint found, starting from scratch")
 
     logger = Logger(config['work_dir'])
-    episode, episode_reward, episode_step, terminated =0, 0, 0, True
+    episode, episode_reward, episode_step, terminated,truncated =0, 0, 0, True,True
     max_mean_ep_reward = 0
 
     pbar = tqdm(range(start_step, num_train_steps), desc="Training", initial=start_step, total=num_train_steps)
@@ -213,8 +213,9 @@ def train(args):
                 prev_action_eval = None
                 video.init(enabled=(i == 0))
                 terminated_eval = False
+                truncated_eval = False
                 episode_reward_eval = 0
-                while not terminated_eval:
+                while not (terminated_eval or truncated_eval):
                     # center crop image
                     obs_eval = center_crop_image(obs_eval, config['augmented_img_size'])
                     with eval_mode(agent):
@@ -238,7 +239,7 @@ def train(args):
                 agent.save(model_dir, t, episode)
                 replay_buffer.save(buffer_dir)
 
-        if terminated:
+        if terminated or truncated:
             if t > init_step and t % log_interval == 0:
                 logger.dump(t)
             if t % log_interval == 0:
@@ -248,6 +249,7 @@ def train(args):
             prev_state = None
             prev_action = None
             terminated = False
+            truncated= False
             episode_reward = 0
             episode_step = 0
             episode += 1
@@ -270,7 +272,7 @@ def train(args):
         next_obs, reward, terminated, truncated, info = env.step(action)
 
 
-        done_bool = 0 if episode_step + 1 == env._max_episode_steps else float(terminated) #done_bool = 0.0 if truncated else float(terminated)
+        done_bool = 0.0 if truncated else float(terminated)
         episode_reward += reward
         replay_buffer.add(obs, action, reward, next_obs, done_bool)
         
