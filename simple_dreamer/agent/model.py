@@ -12,29 +12,107 @@ def initialize_weights(m):
         nn.init.kaiming_uniform_(m.weight.data)
         nn.init.constant_(m.bias.data, 0)
 
+# Add symlog/symexp transformations
+def symlog(x):
+    return torch.sign(x) * torch.log(torch.abs(x) + 1.0)
 
-def create_normal_dist(
-    x,
-    std=None,
-    mean_scale=1,
-    init_std=0,
-    min_std=0.1,
-    activation=None,
-    event_shape=None,
-):
-    if std == None:
-        mean, std = torch.chunk(x, 2, -1)
-        mean = mean / mean_scale
-        if activation:
-            mean = activation(mean)
-        mean = mean_scale * mean
-        std = F.softplus(std + init_std) + min_std
-    else:
-        mean = x
-    dist = torch.distributions.Normal(mean, std)
-    if event_shape:
-        dist = torch.distributions.Independent(dist, event_shape)
-    return dist
+def symexp(x):
+    return torch.sign(x) * (torch.exp(torch.abs(x)) - 1.0)
+
+class OneHotDist(td.OneHotCategorical):
+    """OneHot distribution with unimix and straight-through gradients"""
+    def __init__(self, logits=None, probs=None, unimix_ratio=0.01):
+        if logits is not None and unimix_ratio > 0.0:
+            probs = F.softmax(logits, dim=-1)
+            probs = probs * (1.0 - unimix_ratio) + unimix_ratio / probs.shape[-1]
+            logits = torch.log(probs)
+            super().__init__(logits=logits, probs=None)
+        else:
+            super().__init__(logits=logits, probs=probs)
+
+    def mode(self):
+        _mode = F.one_hot(
+            torch.argmax(super().logits, axis=-1), super().logits.shape[-1]
+        )
+        return _mode.detach() + super().logits - super().logits.detach()
+
+    def sample(self, sample_shape=()):
+        sample = super().sample(sample_shape).detach()
+        probs = super().probs
+        while len(probs.shape) < len(sample.shape):
+            probs = probs[None]
+        sample += probs - probs.detach()
+        return sample
+
+class SymlogDist:
+    """Distribution for symlog-transformed predictions"""
+    def __init__(self, mode, dist='mse', agg='sum', tol=1e-8):
+        self._mode = mode
+        self._dist = dist
+        self._agg = agg
+        self._tol = tol
+
+    def mode(self):
+        return symexp(self._mode)
+
+    def mean(self):
+        return symexp(self._mode)
+
+    def log_prob(self, value):
+        assert self._mode.shape == value.shape
+        if self._dist == 'mse':
+            distance = (self._mode - symlog(value)) ** 2.0
+            distance = torch.where(distance < self._tol, 0, distance)
+        elif self._dist == 'abs':
+            distance = torch.abs(self._mode - symlog(value))
+            distance = torch.where(distance < self._tol, 0, distance)
+        else:
+            raise NotImplementedError(self._dist)
+        if self._agg == 'mean':
+            loss = distance.mean(list(range(len(distance.shape)))[2:])
+        elif self._agg == 'sum':
+            loss = distance.sum(list(range(len(distance.shape)))[2:])
+        else:
+            raise NotImplementedError(self._agg)
+        return -loss
+
+class TwoHotDist:
+    """Two-hot encoding distribution for robust value/reward prediction"""
+    def __init__(self, logits, low=-20.0, high=20.0, device='cuda'):
+        self.logits = logits
+        self.probs = torch.softmax(logits, -1)
+        self.buckets = torch.linspace(low, high, steps=255, device=device)
+        self.width = (self.buckets[-1] - self.buckets[0]) / 255
+
+    def mean(self):
+        _mean = self.probs * self.buckets
+        return symexp(torch.sum(_mean, dim=-1, keepdim=True))
+
+    def mode(self):
+        return self.mean()
+
+    def log_prob(self, x):
+        x = symlog(x)
+        below = torch.sum((self.buckets <= x[..., None]).to(torch.int32), dim=-1) - 1
+        above = len(self.buckets) - torch.sum(
+            (self.buckets > x[..., None]).to(torch.int32), dim=-1
+        )
+        below = torch.clip(below, 0, len(self.buckets) - 1)
+        above = torch.clip(above, 0, len(self.buckets) - 1)
+        equal = below == above
+
+        dist_to_below = torch.where(equal, 1, torch.abs(self.buckets[below] - x))
+        dist_to_above = torch.where(equal, 1, torch.abs(self.buckets[above] - x))
+        total = dist_to_below + dist_to_above
+        weight_below = dist_to_above / total
+        weight_above = dist_to_below / total
+        target = (
+            F.one_hot(below, num_classes=len(self.buckets)) * weight_below[..., None]
+            + F.one_hot(above, num_classes=len(self.buckets)) * weight_above[..., None]
+        )
+        log_pred = self.logits - torch.logsumexp(self.logits, -1, keepdim=True)
+        target = target.squeeze(-2)
+        return (target * log_pred).sum(-1)
 
 
 def stack_states(rssm_states, dim):
@@ -58,10 +136,6 @@ class RSSMState:
     def to_tuple(self):
         return self.mean, self.std, self.stoch, self.det
 
-# depth : 32
-# stride : 2
-# kernel_size : 4
-# activation : ReLU
 
 class ObservationEncoder(nn.Module):
     def __init__(
@@ -76,13 +150,13 @@ class ObservationEncoder(nn.Module):
         self.obs_encoder_feature_dim = obs_encoder_feature_dim
 
         self.convs = nn.Sequential(
-            nn.Conv2d(shape[0],depth, kernel_size, stride),
+            nn.Conv2d(shape[0], depth, kernel_size, stride),
             nn.ReLU(),
-            nn.Conv2d(depth,depth*2, kernel_size, stride),
+            nn.Conv2d(depth, depth*2, kernel_size, stride),
             nn.ReLU(),
-            nn.Conv2d(depth*2,depth*4, kernel_size, stride),
+            nn.Conv2d(depth*2, depth*4, kernel_size, stride),
             nn.ReLU(),
-            nn.Conv2d(depth*4,depth*8, kernel_size, stride),
+            nn.Conv2d(depth*4, depth*8, kernel_size, stride),
             nn.ReLU(),
         )
         self.convs.apply(initialize_weights)
@@ -100,51 +174,21 @@ class ObservationEncoder(nn.Module):
         img_shape = obses.shape[-3:]
         obses = obses.reshape(-1, *img_shape)
 
-        # obses = obses / 255.
+        # Apply symlog transformation for robustness
+        obses = symlog(obses / 255.0)
+        
         embed = self.convs(obses)
         embed = torch.reshape(embed, (np.prod(batch_shape), -1))
         embed = self.fc(embed)
         embed = self.ln(embed)
-        # embed = torch.tanh(embed)
         embed = torch.reshape(embed, (*batch_shape, -1))
 
         return embed
-    
-    def spatial_attention(self, obs):
-        spatial_softmax = nn.Softmax(1)
-        img_shape = obs.shape[-3:]
-        gs = [None] * len(self.convs)
-        x = obs
-        for idx, layer in enumerate(self.convs):
-            x = layer(
-                x.reshape(-1, *img_shape) / 255.
-            ) if idx == 0 else layer(x)
-            gs[idx] = x
-        gs = [gs_.pow(2).mean(1) for gs_ in gs]
-        return [spatial_softmax(
-            gs_.view(*gs_.size()[:1], -1)
-        ).view_as(gs_) for gs_ in gs]
 
-
-#recurrent_model:
-    # hidden_size : 200
-    # activation : ELU
-
-# transition_model : 
-    # hidden_size : 200
-    # num_layers : 2
-    # activation : ELU
-    # min_std : 0.1
-
-# representation_model:
-    # hidden_size : 200
-    # num_layers : 2
-    # activation : ELU
-    # min_std : 0.1
 
 class RSSMTransition(nn.Module):
     def __init__(self, action_size, stochastic_size=30, deterministic_size=200,
-        hidden_size=200, activation=nn.ELU
+        hidden_size=200, activation=nn.ELU, unimix_ratio=0.01
     ):
         super().__init__()
         self.action_size = action_size
@@ -152,46 +196,56 @@ class RSSMTransition(nn.Module):
         self.det_size = deterministic_size
         self.hidden_size = hidden_size
         self.activation = activation
+        self.unimix_ratio = unimix_ratio
         
         self.gru = nn.GRUCell(hidden_size, deterministic_size)
         self.ln_stoch = nn.LayerNorm(stochastic_size)
         self.ln_det = nn.LayerNorm(deterministic_size)
 
         self.rnn_input_fc = nn.Sequential(
-            nn.Linear(self.action_size+self.stoch_size, self.hidden_size),
+            nn.Linear(self.action_size + self.stoch_size, self.hidden_size),
             self.activation()
         )
 
+        # Output 32 classes per stochastic dimension (like DreamerV3)
+        self.num_classes = 32
         self.stoch_fc = nn.Sequential(
             nn.Linear(self.det_size, self.hidden_size),
             self.activation(),
             nn.LayerNorm(self.hidden_size),
-            nn.Linear(self.hidden_size, 2 * self.stoch_size),
+            nn.Linear(self.hidden_size, self.stoch_size * self.num_classes),
         )
 
-    def forward(self,prev_action,prev_state:RSSMState):
+    def forward(self, prev_action, prev_state: RSSMState):
         x = torch.cat([prev_action, prev_state.stoch], dim=-1)
         rnn_input = self.rnn_input_fc(x)
 
-        #GRU update
-        det = self.gru(rnn_input,prev_state.det)
+        # GRU update
+        det = self.gru(rnn_input, prev_state.det)
         det = self.ln_det(det)
 
-        #stochastic prior 
-        mean,std = torch.chunk(self.stoch_fc(det),2,dim=-1)
-        std = F.softplus(std) + 0.1
-
-        #sample stochastic state
-        distribution = td.Normal(mean,std)
-        stoch = distribution.rsample()
+        # Stochastic prior using categorical distribution
+        logits = self.stoch_fc(det)
+        logits = logits.reshape(*logits.shape[:-1], self.stoch_size, self.num_classes)
+        
+        # Sample from categorical with unimix
+        dist = OneHotDist(logits=logits, unimix_ratio=self.unimix_ratio)
+        stoch = dist.sample()
+        stoch = stoch.reshape(*stoch.shape[:-2], -1)
         stoch = self.ln_stoch(stoch)
-        return RSSMState(mean,std,stoch,det)
+        
+        # For mean/std, use average of categorical
+        mean = dist.probs.mean(dim=-1)
+        std = dist.probs.std(dim=-1)
+        
+        return RSSMState(mean, std, stoch, det)
+
 
 class RSSMRepresentation(nn.Module):
     def __init__(
         self, transition_model: RSSMTransition, obs_encoder_feature_dim, action_size,
         stochastic_size=30, deterministic_size=200, hidden_size=200,
-        activation=nn.ELU
+        activation=nn.ELU, unimix_ratio=0.01
     ):
         super().__init__()
         self.transition_model = transition_model
@@ -201,14 +255,16 @@ class RSSMRepresentation(nn.Module):
         self.det_size = deterministic_size
         self.hidden_size = hidden_size
         self.activation = activation
+        self.unimix_ratio = unimix_ratio
 
         self.ln_stoch = nn.LayerNorm(stochastic_size)
-
+        
+        self.num_classes = 32
         self.stoch_fc = nn.Sequential(
-            nn.Linear(self.det_size+self.obs_encoder_feature_dim,self.hidden_size),
+            nn.Linear(self.det_size + self.obs_encoder_feature_dim, self.hidden_size),
             self.activation(),
             nn.LayerNorm(self.hidden_size),
-            nn.Linear(self.hidden_size,2*self.stoch_size)
+            nn.Linear(self.hidden_size, self.stoch_size * self.num_classes)
         )
 
     def initial_state(self, batch_size, device):
@@ -220,24 +276,29 @@ class RSSMRepresentation(nn.Module):
             torch.zeros(batch_size, self.det_size, device=device),
         )
 
-    def forward(self,embed_obs,prev_action,prev_state:RSSMState):
-        #prior state
+    def forward(self, embed_obs, prev_action, prev_state: RSSMState):
+        # Prior state
         prior_state = self.transition_model(prev_action, prev_state)
+        
         x = torch.cat([prior_state.det, embed_obs], dim=-1)
-        #stochastic prior 
-        mean,std = torch.chunk(self.stoch_fc(x),2,dim=-1)
-        std = F.softplus(std) + 0.1
-
-        #sample stochastic state
-        distribution = td.Normal(mean,std)
-        stoch = distribution.rsample()
+        
+        # Posterior with categorical distribution
+        logits = self.stoch_fc(x)
+        logits = logits.reshape(*logits.shape[:-1], self.stoch_size, self.num_classes)
+        
+        dist = OneHotDist(logits=logits, unimix_ratio=self.unimix_ratio)
+        stoch = dist.sample()
+        stoch = stoch.reshape(*stoch.shape[:-2], -1)
         stoch = self.ln_stoch(stoch)
+        
+        mean = dist.probs.mean(dim=-1)
+        std = dist.probs.std(dim=-1)
 
-        #posterior state
-        posterior_state = RSSMState(mean,std,stoch,prior_state.det)
+        posterior_state = RSSMState(mean, std, stoch, prior_state.det)
 
         return prior_state, posterior_state
-    
+
+
 class RSSMRollout(nn.Module):
     def __init__(
         self, representation_model: RSSMRepresentation,
@@ -247,7 +308,7 @@ class RSSMRollout(nn.Module):
         self.representation_model = representation_model
         self.transition_model = transition_model
 
-    def forward(self, seq_len, embed_obses,actions, prev_state: RSSMState):
+    def forward(self, seq_len, embed_obses, actions, prev_state: RSSMState):
         return self.rollout_representation(
             seq_len, embed_obses, actions, prev_state
         )
@@ -267,44 +328,29 @@ class RSSMRollout(nn.Module):
         return prior, post
     
     def rollout_imagination(self, horizon_length, actor, initial_state: RSSMState):
-        """
-        Imagine future trajectories using transition model only (no observations)
-        
-        Args:
-            horizon_length: Number of steps to imagine
-            actor: Policy network to generate actions
-            initial_state: Starting RSSMState
-        Returns:
-            imagined_states: List of imagined RSSMStates
-        """
-
         imagined_priors = []
         prev_state = initial_state
         
         for t in range(horizon_length):
-            # Get action from actor policy
             action = actor(prev_state.stoch, prev_state.det)  
-            
-            # Predict next state using transition model (no observation)
             next_state = self.transition_model(action, prev_state)
-            
             imagined_priors.append(next_state)
             prev_state = next_state
         
-        # Stack imagined states
         imagined_trajectory = stack_states(imagined_priors, dim=0)
         return imagined_trajectory
-    
+
+
 class RSSMEncoder(nn.Module):
     def __init__(
-    self, obs_shape=(3, 84, 84), actions_size=6, obs_encoder_feature_dim=1024,
-    stochastic_size=30, deterministic_size=200, num_layers=4, num_filters=32,
-    hidden_size=1024, dtype=torch.float, device=None
+        self, obs_shape=(3, 84, 84), actions_size=6, obs_encoder_feature_dim=1024,
+        stochastic_size=30, deterministic_size=200, num_layers=4, num_filters=32,
+        hidden_size=1024, dtype=torch.float, device=None
     ):
         super().__init__()
         self.obs_shape = obs_shape
-        self.actions_size = self.actions_size = np.prod(actions_size) if isinstance(actions_size, (list, tuple)) else actions_size
-        actions_size = self.actions_size = np.prod(actions_size) if isinstance(actions_size, (list, tuple)) else actions_size
+        self.actions_size = np.prod(actions_size) if isinstance(actions_size, (list, tuple)) else actions_size
+        actions_size = self.actions_size
         self.stoch_size = stochastic_size
         self.det_size = deterministic_size
         self.latent_size = stochastic_size + deterministic_size
@@ -312,14 +358,11 @@ class RSSMEncoder(nn.Module):
         self.dtype = dtype
         self.device = device
 
-        # observation encoder
         self.observation_encoder = ObservationEncoder(
             shape=obs_shape, num_layers=num_layers, obs_encoder_feature_dim=obs_encoder_feature_dim,
             depth=num_filters
         )
-        # pixel_embed_size = self.observation_encoder.obs_encoder_feature_dim
 
-        # RSSM model
         self.transition = RSSMTransition(
             actions_size, stochastic_size, deterministic_size, hidden_size
         )
@@ -328,106 +371,81 @@ class RSSMEncoder(nn.Module):
             stochastic_size, deterministic_size, hidden_size
         )
         self.rollout = RSSMRollout(self.representation, self.transition)
-
-        # layer normalization
         self.ln = nn.LayerNorm(self.latent_size)
 
-
     def forward(self, obs, prev_action, prev_state):
-        """
-        Single-step inference
-        Use for action selection
-        """
         state = self.get_state_representation(obs, prev_action, prev_state)
         return state
     
     def get_state_representation(self, obs, prev_action, prev_state):
-        # 1. Encode pixels to features
         embed_obses = self.observation_encoder(obs)
 
-        # 2. Initialize if first step
         if prev_action is None:
             prev_action = torch.zeros(obs.size(0), self.actions_size, device=self.device)
         if prev_state is None:
             prev_state = self.representation.initial_state(prev_action.size(0), device=self.device)
 
-        # 3. Infer current state using representation network  
         _, state = self.representation(embed_obses, prev_action, prev_state)
         return state
     
     def encode_sequence(self, obes, actions):
-        """
-        Sequential encoding for trajectory data 
-        Use for representation learning
-        """
         seq_len, batch_size, ch, h, w = obes.size()
        
-        # Prepare actions with zero padding at start
         prev_actions = actions[:-1]
-        prev_action = torch.zeros(batch_size,self.actions_size, device=self.device, dtype=actions.dtype).unsqueeze(0)
+        prev_action = torch.zeros(batch_size, self.actions_size, device=self.device, dtype=actions.dtype).unsqueeze(0)
         prev_actions = torch.cat([prev_action, prev_actions], dim=0)
         
-        # Initialize state
         prev_state = self.representation.initial_state(batch_size, device=self.device)
         
-        # Encode all observations at once
         embed_obses = self.observation_encoder(obes)
 
-        # Run rollout through sequence
         prior, posterior = self.rollout.rollout_representation(
             seq_len, embed_obses, prev_actions, prev_state
         )
 
         return prior, posterior
 
-# hidden_size : 400
-# num_layers : 2
-# activation : ELU
-
 
 class RewardModel(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, use_twohot=True):
         super().__init__()
         self.config = config['parameters']['dreamer']
         self.stochastic_size = self.config['stochastic_size']
         self.deterministic_size = self.config['deterministic_size']
+        self.use_twohot = use_twohot
  
-        self.network = nn.Sequential(
-            nn.Linear(self.stochastic_size + self.deterministic_size, 400),
-            nn.ELU(),
-            nn.Linear(400, 1)
-        )
-        self.network.apply(initialize_weights)
+        if use_twohot:
+            # Output 255 bins for two-hot encoding
+            self.network = nn.Sequential(
+                nn.Linear(self.stochastic_size + self.deterministic_size, 400),
+                nn.ELU(),
+                nn.Linear(400, 255)
+            )
+        else:
+            self.network = nn.Sequential(
+                nn.Linear(self.stochastic_size + self.deterministic_size, 400),
+                nn.ELU(),
+                nn.Linear(400, 1)
+            )
+        
+        # Initialize output layer to zeros
+        nn.init.zeros_(self.network[-1].weight)
+        nn.init.zeros_(self.network[-1].bias)
 
     def forward(self, posterior, deterministic):
-        """
-        Args:
-            posterior: (seq_len, batch_size, stoch_size)
-            deterministic: (seq_len, batch_size, det_size)
-        Returns:
-            dist: Independent Normal distribution over predicted rewards
-        """
-        # Get seq_len and batch_size
         seq_len, batch_size = posterior.shape[:2]
-        
-        # Concatenate posterior and deterministic
         x = torch.cat((posterior, deterministic), dim=-1)
-        
-        # Flatten seq_len and batch dimensions
         x = x.reshape(seq_len * batch_size, -1)
-        
-        # Pass through network
         x = self.network(x)
+        x = x.reshape(seq_len, batch_size, -1)
         
-        # Reshape back to (seq_len, batch_size, 1)
-        x = x.reshape(seq_len, batch_size, 1)
-        
-        # Create Normal distribution with mean=x, std=1
-        # Independent over the scalar reward dimension
-        dist = td.Independent(
-            td.Normal(x, torch.ones_like(x)), 
-            1  # event_shape=1 for scalar reward
-        )
+        if self.use_twohot:
+            dist = TwoHotDist(x, device=posterior.device)
+        else:
+            dist = td.Independent(
+                td.Normal(x, torch.ones_like(x)), 
+                1
+            )
         return dist
 
 
@@ -448,29 +466,10 @@ class ContinueModel(nn.Module):
         self.network.apply(initialize_weights)
 
     def forward(self, posterior, deterministic):
-        """
-        Args:
-            posterior: (seq_len, batch_size, stoch_size)
-            deterministic: (seq_len, batch_size, det_size)
-        Returns:
-            dist: Bernoulli distribution over continue flag
-        """
-        # Get seq_len and batch_size
         seq_len, batch_size = posterior.shape[:2]
-        
-        # Concatenate posterior and deterministic
         x = torch.cat((posterior, deterministic), dim=-1)
-        
-        # Flatten seq_len and batch dimensions
         x = x.reshape(seq_len * batch_size, -1)
-        
-        # Pass through network
         x = self.network(x)
-        
-        # Reshape back to (seq_len, batch_size, 1)
         x = x.reshape(seq_len, batch_size, 1)
-        
-        # Create Bernoulli distribution from logits
-        # Squeeze the last dimension for proper Bernoulli shape
-        dist = td.Bernoulli(logits=x.squeeze(-1))  # (seq_len, batch_size)
+        dist = td.Bernoulli(logits=x.squeeze(-1))
         return dist

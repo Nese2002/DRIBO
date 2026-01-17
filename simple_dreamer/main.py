@@ -115,7 +115,7 @@ def main(config_file):
 
 
     agent = Dreamer(
-            obs_shape, discrete_action_bool, action_size, writer, device, config
+            obs_shape, discrete_action_bool, action_size, writer, device, config, work_dir
         )
 
     agent.train(env)
