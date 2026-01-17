@@ -83,7 +83,7 @@ class Dreamer:
         self.video = VideoRecorder(dir_name=video_dir, height=480, width=640)
 
         # Initialize models with DreamerV3 enhancements
-        self.rssm = RSSMEncoder(actions_size=(action_size,)).to(self.device)
+        self.rssm = RSSMEncoder(actions_size=(action_size,),device=self.device).to(self.device)
         self.reward_predictor = RewardModel(config, use_twohot=True).to(self.device)
 
         self.buffer = ReplayBuffer((3,100,100), 
