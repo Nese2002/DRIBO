@@ -79,8 +79,8 @@ def setup_environment(args):
     
     base_dir = "/content/drive/MyDrive/DRIBO_logs"
     env_name = args.domain_name + '-' + args.task_name
-    # work_dir = os.path.join(base_dir, env_name)
-    work_dir =  "./log" + '/' + env_name
+    work_dir = os.path.join(base_dir, env_name)
+    # work_dir =  "./log" + '/' + env_name
     
     os.makedirs(work_dir, exist_ok=True)
     
@@ -113,9 +113,9 @@ def train(args):
     batch_size = 8
     episode_len = config['total_frames'] // config['frame_skip']
     num_train_steps = 500000
-    eval_freq = 50
-    num_eval_episodes = 1
-    init_step = 100
+    eval_freq = 5000
+    num_eval_episodes = 3
+    init_step = 1000
     log_interval = 100
 
     # Create directories
