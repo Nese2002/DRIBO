@@ -185,7 +185,6 @@ class ObservationEncoder(nn.Module):
 
         return embed
 
-
 class RSSMTransition(nn.Module):
     def __init__(self, action_size, stochastic_size=30, deterministic_size=200,
         hidden_size=200, activation=nn.ELU, unimix_ratio=0.01
@@ -231,7 +230,13 @@ class RSSMTransition(nn.Module):
         # Sample from categorical with unimix
         dist = OneHotDist(logits=logits, unimix_ratio=self.unimix_ratio)
         stoch = dist.sample()
-        stoch = stoch.reshape(*stoch.shape[:-2], -1)
+        # Fix: flatten only the one-hot encoding dimension, keeping stoch_size separate
+        stoch = stoch.reshape(*stoch.shape[:-2], self.stoch_size * self.num_classes)
+        
+        # Then take mean across classes to get back to stoch_size dimension
+        stoch = stoch.reshape(*stoch.shape[:-1], self.stoch_size, self.num_classes)
+        stoch = stoch.mean(dim=-1)  # Average the one-hot encoding
+        
         stoch = self.ln_stoch(stoch)
         
         # For mean/std, use average of categorical
@@ -288,7 +293,11 @@ class RSSMRepresentation(nn.Module):
         
         dist = OneHotDist(logits=logits, unimix_ratio=self.unimix_ratio)
         stoch = dist.sample()
-        stoch = stoch.reshape(*stoch.shape[:-2], -1)
+        # Fix: same fix as in RSSMTransition
+        stoch = stoch.reshape(*stoch.shape[:-2], self.stoch_size * self.num_classes)
+        stoch = stoch.reshape(*stoch.shape[:-1], self.stoch_size, self.num_classes)
+        stoch = stoch.mean(dim=-1)
+        
         stoch = self.ln_stoch(stoch)
         
         mean = dist.probs.mean(dim=-1)
@@ -297,7 +306,6 @@ class RSSMRepresentation(nn.Module):
         posterior_state = RSSMState(mean, std, stoch, prior_state.det)
 
         return prior_state, posterior_state
-
 
 class RSSMRollout(nn.Module):
     def __init__(

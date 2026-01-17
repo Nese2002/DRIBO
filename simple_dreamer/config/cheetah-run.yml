@@ -13,7 +13,7 @@ environment :
     height : 100
     width : 100
     frame_skip : 4
-    resource_files: dataset/train/*.avi
+    resource_files: ../dataset/train/*.avi
     total_frames: 1000
     pixel_norm : True
     
