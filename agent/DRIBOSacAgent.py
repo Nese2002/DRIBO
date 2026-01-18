@@ -54,7 +54,7 @@ class DRIBOSacAgent(object):
         actions_shape,
         #general
         device,
-        hidden_dim=1024,
+        hidden_dim=512,
         log_interval=100, 
         #critic
         discount=0.99,
@@ -70,13 +70,13 @@ class DRIBOSacAgent(object):
         actor_log_std_max=2,
         actor_update_freq=2,
         #rssm
-        obs_encoder_feature_dim=1024,
+        obs_encoder_feature_dim=512,
         stochastic_size=30,
         deterministic_size=200,
         encoder_lr=1e-5,
         encoder_tau=0.05,
         num_layers=4,
-        num_filters=32, #16
+        num_filters=16, #16
         #DRIBO
         mib_update_freq=1,
         mib_batch_size=8,
@@ -167,7 +167,7 @@ class DRIBOSacAgent(object):
             prev_state = self.encoder(obs, prev_action, prev_state)
             latent_state = torch.cat([prev_state.stoch, prev_state.det], dim=-1)
 
-            latent_state = self.encoder.ln(latent_state)
+            # latent_state = self.encoder.ln(latent_state)
 
             mu, _, _, _ = self.actor(latent_state, compute_pi=False, compute_log_pi=False)
             return mu.cpu().data.numpy().flatten(), mu, prev_state
@@ -182,7 +182,7 @@ class DRIBOSacAgent(object):
             current_state = self.encoder(obs, prev_action, prev_state)
             latent_state = torch.cat([current_state.stoch, current_state.det], dim=-1)
 
-            latent_state = self.encoder.ln(latent_state)
+            # latent_state = self.encoder.ln(latent_state)
 
             mu, pi, _, _ = self.actor(latent_state, compute_log_pi=False)
             action = pi.squeeze(0).cpu().numpy()
@@ -243,7 +243,7 @@ class DRIBOSacAgent(object):
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), self.grad_clip)
+        # torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), self.grad_clip)
 
         self.critic_optimizer.step()
 
@@ -291,8 +291,8 @@ class DRIBOSacAgent(object):
         latent_states1 =torch.cat([s1.stoch, s1.det], dim=-1).reshape(seq_len * batch_size, -1)
         latent_states2 = torch.cat([s2.stoch, s2.det], dim=-1).reshape(seq_len * batch_size, -1)
 
-        latent_states1 = self.encoder.ln(latent_states1)
-        latent_states2 = self.encoder.ln(latent_states2)
+        # latent_states1 = self.encoder.ln(latent_states1)
+        # latent_states2 = self.encoder.ln(latent_states2)
 
         logits = self.DRIBO.compute_logits(latent_states1, latent_states2)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
@@ -311,7 +311,7 @@ class DRIBOSacAgent(object):
         self.DRIBO_optimizer.zero_grad()
         loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), self.grad_clip)
+        # torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), self.grad_clip)
         
         self.encoder_optimizer.step()
         self.DRIBO_optimizer.step()
